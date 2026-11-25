@@ -1,0 +1,80 @@
+{
+  "renderMode": "3d",
+  "world": {
+    "laneCount": 3,
+    "laneWidth": 110,
+    "runwayHalf": 190,
+    "spawnZ": 46,
+    "despawnZ": -2
+  },
+  "speed": {
+    "base": 13,
+    "gain": 0.045,
+    "gainCap": 16
+  },
+  "player": {
+    "jumpDuration": 0.62,
+    "jumpSafeFrom": 0.12,
+    "jumpSafeTo": 0.88,
+    "slideDuration": 0.55,
+    "diveJumpTo": 0.42,
+    "laneLerp": 11,
+    "reviveInvincible": 2.2,
+    "reviveClearZ": 14,
+    "reviveKeepZ": 14
+  },
+  "spawn": {
+    "rowInterval": 8,
+    "singleRowChance": 0.45,
+    "propInterval": 2.4,
+    "fragmentChance": 0.6,
+    "fragmentCount": 5,
+    "fragmentGap": 1.5,
+    "fragmentLead": 1.6,
+    "treeChance": 0.7,
+    "propSideMin": 1.55,
+    "propSideSpread": 0.9,
+    "propScaleMin": 0.8,
+    "propScaleSpread": 0.7
+  },
+  "obstacle": {
+    "hitZ": 0.55,
+    "pickupZFrom": -0.5,
+    "pickupZTo": 0.9
+  },
+  "death": {
+    "slowmo": 0.25,
+    "dieDelay": 0.95,
+    "dieRate": 2.8,
+    "slowmoRecover": 1.4,
+    "ambientRecover": 3
+  },
+  "milestone": {
+    "step": 1000,
+    "liScale": 3,
+    "skyRange": 30000
+  },
+  "ad": {
+    "mode": "mock",
+    "countdownSteps": 3,
+    "stepDuration": 0.85,
+    "adUnitId": ""
+  },
+  "ui": {
+    "title": "逐 日",
+    "subtitle": "夸父逐日 · 神话跑酷",
+    "hintSwipe": "左右滑动变道 · 上滑跳跃 · 下滑俯冲",
+    "startBtn": "【 起 跑 】",
+    "deadTitle": "力 竭",
+    "reviveBtn": "▶ 观看广告 · 原地复活",
+    "restartBtn": "重新起跑",
+    "reviveNote": "复活每轮一次 · 真机接入 wx.createRewardedVideoAd",
+    "adTitle": "广告演示",
+    "adNote": "真实场景为 15-30 秒激励视频 · 看完才发奖",
+    "milestoneText": "日影渐近 · {n} 里",
+    "distLabel": "已逐 {n} 里",
+    "fragLabel": "阳炎 × {n}",
+    "deadDistLabel": "已逐日 {n} 里",
+    "deadFragLabel": "拾得阳炎 × {n}"
+  }
+}

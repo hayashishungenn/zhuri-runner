@@ -1,0 +1,21 @@
+{
+    "extends": "./temp/tsconfig.cocos.json",
+    "compilerOptions": {
+        "lib": ["ES2020", "DOM"],
+        "skipLibCheck": true,
+        "moduleResolution": "bundler",
+        "module": "esnext",
+        "types": [
+            "./temp/declarations/cc",
+            "./temp/declarations/cc.custom-macro",
+            "./temp/declarations/jsb",
+            "./temp/declarations/cc.env",
+            "node"
+        ]
+    },
+    "include": [
+        "tests/**/*.ts",
+        "assets/scripts/**/*.ts",
+        "temp/declarations/**/*.d.ts"
+    ]
+}
