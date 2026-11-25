@@ -9,10 +9,10 @@
 | 任务书模块 | 落点 | 状态 | 说明 |
 |-----------|------|------|------|
 | Core | `core/`（GameCore 状态机、rng 可播种随机、types、Logger） | ✅ | 规则唯一真源；零 cc 依赖可单测 |
-| Runner | `core/GameCore.ts` 内的速度/跳跃/俯冲/变道机制 | ✅ | P2 若复杂化（道具/转弯）再拆 `runner/` |
-| World | `core/` 实体数组（obstacles/fragments/props）+ `render/Renderer3D.build*` 场景构建 | ✅（直线跑道） | 🅿️ 路口转弯/主题分段时拆 `world/` |
-| Input | `input/InputController.ts` | ✅ | 意图归一化，不含玩法 |
-| Camera | `render/Renderer3D.updateCamera`（第三人称跟随/震屏）；2D 伪相机在 `Renderer2D` | ✅ | 🅿️ 首人称/过场再抽 `camera/` |
+| Runner | `core/GameCore.ts` 速度/跳跃/俯冲/变道/踉跄减速/暂停 | ✅ | P2 若复杂化（道具/转弯）再拆 `runner/` |
+| World | `core/track.ts`（TrackPath 路径抽象 + StraightPath）+ 实体数组 + `Renderer3D.build*` | ✅（直线跑道） | 🅿️ 90° 转弯时实现 ArcPath 接入同一接口（核心层零改动） |
+| Input | `input/InputController.ts`（多点触控按 ID 隔离 / TOUCH_CANCEL / 阈值配置化） | ✅ | 意图归一化，不含玩法 |
+| Camera | `render/Renderer3D.updateCamera`（跟随插值/跳跃高度跟随/速度 fov/震屏上限/穿模防护） | ✅ | 🅿️ 首人称/过场再抽 `camera/` |
 | Collision | `core/GameCore.updateRun` 判定（车道匹配 + 跳/冲窗口 + hitZ） | ✅ | 运动学判定；物理方案参考 REFERENCE_PROJECTS |
 | Gameplay | GameCore 事件系统 + milestone/score/revive | ✅ | 🅿️ 道具/任务 P2 扩展 |
 | Economy | — | 🅿️ P2 | 阳炎经济（本地计数起步，后接结算/兑换） |
@@ -41,16 +41,21 @@ assets/scripts/
 ├── core/                   # ★ 零 cc 依赖，可在 Node 中单测
 │   ├── types.ts            # 实体/状态/意图/事件类型
 │   ├── rng.ts              # 可播种随机源接口（SystemRng / SeededRng）
+│   ├── track.ts            # TrackPath 路径抽象（StraightPath；P2 转弯接入点）
 │   ├── Logger.ts           # 分级日志（core 不写日志，供外层使用）
-│   └── GameCore.ts         # 状态机 + 全部玩法机制（唯一的规则真源）
+│   └── GameCore.ts         # 状态机 + 玩法机制（含踉跄减速/暂停/动作优先级）
+├── input/
+│   └── InputController.ts  # 多点触控按 ID 隔离 / TOUCH_CANCEL / 键盘；阈值来自配置
 ├── input/
 │   └── InputController.ts  # 触摸/键盘 → 归一化意图（gesture/tap），不含玩法
 ├── render/
 │   ├── IRenderer.ts        # 渲染器接口：render / onCoreEvents / destroy
-│   ├── Hud2D.ts            # 2D UI 层（HUD/面板/红闪/暗角），双渲染器共用
+│   ├── CharacterAnimator.ts # 动画状态接口（idle/run/jump/slide/stumble/dead，可整体换模型）
+│   ├── ProceduralKuafu.ts  # 几何体程序化夸父（CharacterAnimator 实现，原创零授权风险）
+│   ├── Hud2D.ts            # 2D UI 层（HUD/暂停面板/红闪/暗角），双渲染器共用
 │   ├── Renderer2D.ts       # Graphics 伪3D（P0 视觉，回退用）
-│   ├── Renderer3D.ts       # 真3D：透视相机 + 平行光 + 运行时构建场景（默认）
-│   ├── ScreenFx.ts         # 震屏/红闪/慢动作（P0 衰减曲线）
+│   ├── Renderer3D.ts       # 真3D：相机(fov/跟随/震屏) + 平行光 + 运行时场景（默认）
+│   ├── ScreenFx.ts         # 震屏/红闪/慢动作（事件驱动，衰减曲线）
 │   └── layout.ts           # 逻辑坐标↔UI 坐标唯一换算源
 └── platform/
     ├── AdService.ts        # 激励视频接口：MockAdService / WxAdService
@@ -60,7 +65,7 @@ assets/scripts/
 ## 生命周期、状态机、日志与错误处理
 
 - **生命周期**：`Game.start()`（异步装配：错误钩子→配置→核心→广告→渲染器→输入）→ `update(dt)`（核心→广告→事件路由→HUD→渲染）→ `onDestroy()`（输入解绑、渲染器销毁）。装配失败显式抛错停止启动（不降级）。
-- **状态机**：`title → run ⇄ dying → dead`（GameCore 唯一持有；P2 浮层引入状态栈，参考 Trash Dash 模式）。
+- **状态机**：`title → run ⇄ dying → dead`（GameCore 唯一持有；run 内含 paused 标志与踉跄修正器；动作优先级表见 GAME_DESIGN）。
 - **日志**：`core/Logger` 四级（debug/info/warn/error），`setLogLevel` 全局控制；微信端 error 自动进入后台 jsError 统计。core 层不写日志（确定性约束），由外层消费事件后记录。
 - **错误处理**：三层——① 启动期：配置校验抛错（fail-fast）；② 运行期：`platform/ErrorHooks` 捕获未处理异常/拒绝并记录（微信端同步上报后台）；③ 确定性约束：随机全部走 Rng 接口，可注入种子复现。
 

@@ -46,6 +46,19 @@
 构建脚本修正：`platforms=wechatgame` → `platform=wechatgame`（Creator 3.x CLI 单数）。
 构建 uuid 规则记录：Creator 压缩 uuid = 前 5 个 hex 字符原样保留 + 其余 27 个 nibble 每 3 个编码为 2 个 base64 字符（compressHex-5），已用 packer-driver 注册表交叉验证。
 
+### Phase 1（任务书：3D 核心系统，2026-11-25）
+
+`npm test` → **77/77 通过**（53 → 77）：
+
+- 受击分级矩阵 6 项（踉跄触发/豁免窗/再撞死亡/墙恒即死/回退开关/减速恢复 + applySlowdown 参数校验）
+- 暂停 4 项（冻结完整性/状态门控/输入拒绝/重开解除）
+- 动作冲突 5 项（jump-land 成对/禁二段跳/起跳取消滑铲/滑铲事件单发/连续切道 clamp）
+- 帧率一致性 3 项：**实测 60fps vs 32fps 60s 里程偏差 0.01%**；抖动帧表 <0.5%；事件计数差 ≤15%（根因量化：spawnAcc/propAcc 阈值跨越帧差 → RNG 交错翻转，离散事件固有，不反馈运动）
+- **10 分钟压测**：600s×36000 帧，随机输入+死亡自动重开；实体池上界断言（16/42/30）通过——无实体泄漏；gTime 精确 600s
+- TrackPath 2 项 + Phase 1 配置校验 3 项
+
+回归：lint 0 错误；type-check 0 错误；微信构建成功（Missing class=0，ProceduralKuafu/StraightPath/stumbleTimer 入包验证）。
+
 ### 待人工验证（无法自动化）
 
 - 微信开发者工具打开 `build/wechatgame`：CLI 依赖「服务端口」开启（当前未开启，报 `.cli` 缺失）与扫码登录
