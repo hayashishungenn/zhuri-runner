@@ -10,12 +10,16 @@
   "type": "3d",
   "version": "3.8.8",
   "devDependencies": {
+    "@eslint/js": "^10.0.1",
     "@types/node": "^26.6.10",
-    "typescript": "^7.0.2",
+    "eslint": "^10.15.0",
+    "typescript": "~5.9.0",
+    "typescript-eslint": "^8.74.0",
     "vitest": "^5.1.2"
   },
   "scripts": {
     "test": "vitest run",
-    "type-check": "tsc --noEmit -p tsconfig.tests.json"
+    "type-check": "tsc --noEmit -p tsconfig.tests.json",
+    "lint": "eslint \"assets/scripts/**/*.ts\" \"tests/**/*.ts\""
   }
 }
