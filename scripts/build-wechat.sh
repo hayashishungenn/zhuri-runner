@@ -3,5 +3,5 @@
 set -e
 CREATOR="/Applications/CocosCreator.app/Contents/MacOS/CocosCreator"
 PROJ="$HOME/Projects/zhuri-runner"
-"$CREATOR" --project "$PROJ" --build "platforms=wechatgame;debug=true"
+"$CREATOR" --project "$PROJ" --build "platform=wechatgame;debug=true"
 echo "构建产物: $PROJ/build/wechatgame"
