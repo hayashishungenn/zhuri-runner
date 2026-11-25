@@ -1,0 +1,16 @@
+{
+  "mcpServers": {
+    "wechat-devtools-mcp": {
+      "command": "uvx",
+      "args": ["wechat-devtools-mcp"],
+      "env": {
+        "WECHAT_DEVTOOLS_CLI": "/Applications/wechatwebdevtools.app/Contents/MacOS/cli",
+        "WECHAT_PROJECT_PATH": "/Users/hayas/Projects/zhuri-runner/build/wechatgame"
+      }
+    },
+    "cocos-creator": {
+      "type": "http",
+      "url": "http://127.0.0.1:3000/mcp"
+    }
+  }
+}

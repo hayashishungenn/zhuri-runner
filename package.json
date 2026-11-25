@@ -1,0 +1,13 @@
+{
+  "name": "zhuri-runner",
+  "uuid": "8f5c2a7e-3b41-4d69-9c25-e7a08b4f16d3",
+  "creator": {
+    "version": "3.8.8"
+  },
+  "description": "逐日 · 夸父逐日神话跑酷（微信小游戏 IAA）",
+  "main": "",
+  "dependencies": {},
+  "author": "",
+  "type": "3d",
+  "version": "3.8.8"
+}
