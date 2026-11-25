@@ -4,11 +4,13 @@
  */
 import { CoreEvent, GameState } from '../core/types';
 
-/** P0 特效常量 */
+/** P0/P1 特效常量 */
 const SHAKE_CRASH = 16;
 const SHAKE_SMASH = 6;
 const SHAKE_PASS = 2.5;
+const SHAKE_STUMBLE = 9;
 const RED_FLASH_CRASH = 0.5;
+const RED_FLASH_STUMBLE = 0.3;
 const RED_FLASH_DECAY = 0.8;
 const SHAKE_DECAY_DYING = 0.05;
 const SHAKE_DECAY_AMBIENT = 0.02;
@@ -20,6 +22,7 @@ export class ScreenFx {
     onEvents(events: CoreEvent[]) {
         for (const e of events) {
             if (e.type === 'crash') { this.shake = SHAKE_CRASH; this.redFlash = RED_FLASH_CRASH; }
+            else if (e.type === 'stumble') { this.shake = Math.max(this.shake, SHAKE_STUMBLE); this.redFlash = Math.max(this.redFlash, RED_FLASH_STUMBLE); }
             else if (e.type === 'obstacleSmashed') this.shake = Math.max(this.shake, SHAKE_SMASH);
             else if (e.type === 'obstaclePassed') this.shake = Math.max(this.shake, SHAKE_PASS);
         }

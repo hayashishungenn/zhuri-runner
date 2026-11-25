@@ -15,6 +15,15 @@ export interface WorldCfg {
     despawnZ: number;
 }
 export interface SpeedCfg { base: number; gain: number; gainCap: number; }
+export interface StumbleCfg {
+    enabled: boolean;
+    /** 踉跄期间速度倍率（<1 即减速） */
+    speedFactor: number;
+    /** 踉跄持续时间（秒） */
+    duration: number;
+    /** 踉跄触发的豁免无敌（秒） */
+    mercyInvincible: number;
+}
 export interface PlayerCfg {
     jumpDuration: number;
     jumpSafeFrom: number;
@@ -25,6 +34,22 @@ export interface PlayerCfg {
     reviveInvincible: number;
     reviveClearZ: number;
     reviveKeepZ: number;
+    stumble: StumbleCfg;
+}
+export interface InputCfg {
+    /** 滑动最小位移（逻辑像素） */
+    swipeMin: number;
+    /** 点按最大位移（逻辑像素） */
+    tapMax: number;
+}
+export interface CameraCfg {
+    fovBase: number;
+    /** 随速度增加的 fov 增量（速度达到 base+gainCap 时取满） */
+    fovGain: number;
+    /** 相机水平跟随插值速率（1/s） */
+    followLerp: number;
+    /** 跳跃高度跟随系数（0 关闭） */
+    heightFollow: number;
 }
 export interface SpawnCfg {
     rowInterval: number;
@@ -50,12 +75,16 @@ export interface UiCfg {
     adTitle: string; adNote: string;
     milestoneText: string; distLabel: string; fragLabel: string;
     deadDistLabel: string; deadFragLabel: string;
+    speedLabel: string; stumbleText: string;
+    pausedTitle: string; resumeBtn: string;
 }
 export interface GameConfig {
     renderMode: RenderMode;
     world: WorldCfg;
     speed: SpeedCfg;
     player: PlayerCfg;
+    input: InputCfg;
+    camera: CameraCfg;
     spawn: SpawnCfg;
     obstacle: ObstacleCfg;
     death: DeathCfg;
@@ -72,7 +101,10 @@ export const DEFAULT_CONFIG: GameConfig = {
     player: {
         jumpDuration: 0.62, jumpSafeFrom: 0.12, jumpSafeTo: 0.88, slideDuration: 0.55, diveJumpTo: 0.42,
         laneLerp: 11, reviveInvincible: 2.2, reviveClearZ: 14, reviveKeepZ: 14,
+        stumble: { enabled: true, speedFactor: 0.45, duration: 1.8, mercyInvincible: 1.5 },
     },
+    input: { swipeMin: 18, tapMax: 8 },
+    camera: { fovBase: 58, fovGain: 10, followLerp: 8, heightFollow: 0.18 },
     spawn: {
         rowInterval: 8, singleRowChance: 0.45, propInterval: 2.4,
         fragmentChance: 0.6, fragmentCount: 5, fragmentGap: 1.5, fragmentLead: 1.6,
@@ -91,6 +123,8 @@ export const DEFAULT_CONFIG: GameConfig = {
         adTitle: '广告演示', adNote: '真实场景为 15-30 秒激励视频 · 看完才发奖',
         milestoneText: '日影渐近 · {n} 里', distLabel: '已逐 {n} 里', fragLabel: '阳炎 × {n}',
         deadDistLabel: '已逐日 {n} 里', deadFragLabel: '拾得阳炎 × {n}',
+        speedLabel: '速度 {n}', stumbleText: '踉跄！',
+        pausedTitle: '暂 停', resumeBtn: '继续奔跑',
     },
 };
 
@@ -104,6 +138,8 @@ const NUM_SECTIONS: Record<string, Record<string, NumRule>> = {
         laneLerp: { min: 0.1 }, reviveInvincible: { min: 0 },
         reviveClearZ: { min: 0 }, reviveKeepZ: { min: 0 },
     },
+    input: { swipeMin: { min: 1 }, tapMax: { min: 0 } },
+    camera: { fovBase: { min: 20, max: 120 }, fovGain: { min: 0, max: 60 }, followLerp: { min: 0.1 }, heightFollow: { min: 0, max: 1 } },
     spawn: {
         rowInterval: { min: 0.1 }, singleRowChance: { min: 0, max: 1 }, propInterval: { min: 0.1 },
         fragmentChance: { min: 0, max: 1 }, fragmentCount: { min: 1, integer: true },
@@ -129,13 +165,26 @@ export function validateConfig(raw: unknown): string[] {
     const hasOwn = (o: Record<string, unknown>, k: string) => Object.prototype.hasOwnProperty.call(o, k);
 
     // 顶层必填 section
-    for (const sec of ['renderMode', 'world', 'speed', 'player', 'spawn', 'obstacle', 'death', 'milestone', 'ad', 'ui']) {
+    for (const sec of ['renderMode', 'world', 'speed', 'player', 'input', 'camera', 'spawn', 'obstacle', 'death', 'milestone', 'ad', 'ui']) {
         if (!hasOwn(obj, sec)) errs.push(`缺少字段 ${sec}`);
     }
     if (errs.length) return errs;
 
     // renderMode / ad.mode 枚举
     if (obj.renderMode !== '2d' && obj.renderMode !== '3d') errs.push(`renderMode 必须为 '2d'|'3d'，实际：${JSON.stringify(obj.renderMode)}`);
+    const pl = obj.player as Record<string, unknown>;
+    const st = pl.stumble as Record<string, unknown> | undefined;
+    if (typeof st !== 'object' || st === null) errs.push('player.stumble 必须是对象');
+    else {
+        if (typeof st.enabled !== 'boolean') errs.push('player.stumble.enabled 必须为布尔');
+        for (const k of ['speedFactor', 'duration', 'mercyInvincible'] as const) {
+            const v = st[k];
+            if (typeof v !== 'number' || !Number.isFinite(v)) errs.push(`player.stumble.${k} 必须是有限数字`);
+            else if (k === 'speedFactor' && (v <= 0 || v > 1)) errs.push(`player.stumble.speedFactor=${v} 必须在 (0,1]`);
+            else if (k !== 'speedFactor' && v < 0) errs.push(`player.stumble.${k}=${v} 不能为负`);
+        }
+    }
+
     const ad = obj.ad as Record<string, unknown>;
     if (ad.mode !== 'mock' && ad.mode !== 'wx') errs.push(`ad.mode 必须为 'mock'|'wx'，实际：${JSON.stringify(ad.mode)}`);
     if (typeof ad.adUnitId !== 'string') errs.push('ad.adUnitId 必须为字符串');

@@ -131,16 +131,83 @@ describe('车道 / 跳跃 / 俯冲', () => {
     });
 });
 
-describe('碰撞判定', () => {
-    it('同车道 rock 未跳 → 撞击（进入 dying 慢动作）', () => {
+/** 无敌跑 t 秒（用于撞墙等即死路径前的推进） */
+describe('碰撞判定（Phase 1 受击分级）', () => {
+    it('同车道 rock 未跳 → 受击踉跄（减速 + 豁免无敌 + 击碎障碍，不死亡）', () => {
+        const c = makeCore();
+        c.startRun();
+        const o = pushObstacle(c, { lane: 0, type: 'rock', z: 0.6 });
+        step(c, 1);
+        expect(c.state).toBe('run');
+        expect(c.stumbling).toBe(true);
+        expect(c.stumbleTimer).toBeGreaterThan(0);
+        expect(c.effectiveSpeed).toBeLessThan(c.speed);      // 减速生效
+        expect(c.invincible).toBe(CFG.player.stumble.mercyInvincible);
+        expect(o.z).toBeLessThan(CFG.world.despawnZ);        // 障碍被击碎
+        expect(c.drainEvents().some((e) => e.type === 'stumble')).toBe(true);
+    });
+
+    it('踉跄中再撞 → 死亡', () => {
         const c = makeCore();
         c.startRun();
         pushObstacle(c, { lane: 0, type: 'rock', z: 0.6 });
         step(c, 1);
+        expect(c.stumbling).toBe(true);
+        // 豁免无敌 1.5s 内不会触发再撞判定的死亡路径？——踉跄期 1.8s > 豁免 1.5s，
+        // 手动越过豁免窗口（推进时间）后再撞
+        c.invincible = 0;
+        pushObstacle(c, { lane: 0, type: 'rock', z: 0.6 });
+        step(c, 1);
+        expect(c.state).toBe('dying');
+        expect(c.drainEvents().some((e) => e.type === 'crash')).toBe(true);
+    });
+
+    it('撞墙始终即死（踉跄不适用）', () => {
+        const c = makeCore();
+        c.startRun();
+        pushObstacle(c, { lane: 0, type: 'wall', z: 0.6 });
+        step(c, 1);
         expect(c.state).toBe('dying');
         expect(c.timeScale).toBe(CFG.death.slowmo);
         expect(c.dieTimer).toBe(CFG.death.dieDelay);
-        expect(c.drainEvents().some((e) => e.type === 'crash')).toBe(true);
+    });
+
+    it('stumble.enabled=false → 任何首撞即死（P0 行为等价开关）', () => {
+        const cfg = JSON.parse(JSON.stringify(CFG));
+        cfg.player.stumble.enabled = false;
+        const c = new GameCore(cfg, new SeededRng(1));
+        c.startRun();
+        pushObstacle(c, { lane: 0, type: 'rock', z: 0.6 });
+        step(c, 1);
+        expect(c.state).toBe('dying');
+    });
+
+    it('踉跄结束后速度恢复公式值', () => {
+        const c = makeCore();
+        c.startRun();
+        pushObstacle(c, { lane: 0, type: 'rock', z: 0.6 });
+        step(c, 1);
+        expect(c.effectiveSpeed).toBeLessThan(c.speed);
+        step(c, Math.ceil(CFG.player.stumble.duration / DT) + 2);
+        expect(c.stumbling).toBe(false);
+        expect(c.effectiveSpeed).toBeCloseTo(c.speed, 5);
+    });
+
+    it('applySlowdown 非法参数抛错', () => {
+        const c = makeCore();
+        expect(() => c.applySlowdown(0, 1)).toThrow();
+        expect(() => c.applySlowdown(1.5, 1)).toThrow();
+        expect(() => c.applySlowdown(0.5, 0)).toThrow();
+    });
+});
+
+describe('碰撞判定（跳/冲窗口）', () => {
+    it('同车道 rock 未跳 → 受击踉跄', () => {
+        const c = makeCore();
+        c.startRun();
+        pushObstacle(c, { lane: 0, type: 'rock', z: 0.6 });
+        step(c, 1);
+        expect(c.stumbling).toBe(true);
     });
 
     it('同车道 rock 空中（窗口内）→ 安全通过', () => {
@@ -154,22 +221,23 @@ describe('碰撞判定', () => {
         expect(c.drainEvents().some((e) => e.type === 'obstaclePassed')).toBe(true);
     });
 
-    it('跳跃窗口外（起跳太晚/落地太晚）不豁免', () => {
+    it('跳跃窗口外（起跳太晚/落地太晚）→ 踉跄（未豁免）', () => {
         const c = makeCore();
         c.startRun();
         c.doJump();
         c.jumpT = 0.95;            // > jumpSafeTo
         pushObstacle(c, { lane: 0, type: 'rock', z: 0.6 });
         step(c, 1);
-        expect(c.state).toBe('dying');
+        expect(c.stumbling).toBe(true);
+        expect(c.state).toBe('run');
     });
 
-    it('同车道 log 需俯冲', () => {
+    it('同车道 log 需俯冲（未俯冲→踉跄；俯冲→安全）', () => {
         const c1 = makeCore();
         c1.startRun();
         pushObstacle(c1, { lane: 0, type: 'log', z: 0.6 });
         step(c1, 1);
-        expect(c1.state).toBe('dying');
+        expect(c1.stumbling).toBe(true);
 
         const c2 = makeCore();
         c2.startRun();
@@ -177,6 +245,7 @@ describe('碰撞判定', () => {
         pushObstacle(c2, { lane: 0, type: 'log', z: 0.6 });
         step(c2, 1);
         expect(c2.state).toBe('run');
+        expect(c2.stumbling).toBe(false);
     });
 
     it('wall 跳跃不可穿越', () => {

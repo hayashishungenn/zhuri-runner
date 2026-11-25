@@ -18,16 +18,18 @@ export class GameCore {
     timeScale = 1;          // 慢动作系数
     dist = 0;               // 逻辑距离（里 = dist * liScale）
     frags = 0;              // 阳炎计数
-    speed: number;
+    speed: number;          // 速度公式值（不含踉跄减速）
     runPhase = 0;           // 跑步动画相位
     playerLaneF = 0;        // 当前车道（浮点，缓动中）
     targetLane = 0;
     jumpT = -1;             // [-1]未跳；[0,1)跳跃进度
     slideT = -1;            // [-1]未俯冲；[0,slideDuration]剩余时间
-    invincible = 0;         // 复活无敌剩余时间
+    invincible = 0;         // 无敌剩余时间（复活/踉跄豁免共用）
     reviveUsed = false;
     milestone: number;
     dieTimer = -1;
+    paused = false;         // 暂停（仅 run 状态可暂停；冻结整帧推进）
+    stumbleTimer = 0;       // 踉跄剩余时间（>0 即踉跄中）
 
     obstacles: Obstacle[] = [];
     fragments: Fragment[] = [];
@@ -37,6 +39,8 @@ export class GameCore {
     private propAcc = 0;
     private rng: Rng;
     private events: CoreEvent[] = [];
+    private slowFactor = 1;     // 减速倍率（踉跄等触发）
+    private slowTimer = 0;
 
     constructor(cfg: GameConfig, rng?: Rng) {
         this.cfg = cfg;
@@ -52,6 +56,12 @@ export class GameCore {
     /** 天色进度 [0,1]（skyRange 里为全程） */
     get skyP(): number { return Math.min(this.li / this.cfg.milestone.skyRange, 1); }
     reviveUsable(): boolean { return !this.reviveUsed; }
+    /** 空中状态（跳跃进行中） */
+    get airborne(): boolean { return this.jumpT >= 0; }
+    /** 踉跄中（受击后的减速与濒危窗口） */
+    get stumbling(): boolean { return this.stumbleTimer > 0; }
+    /** 实际推进速度 = 速度公式 × 减速倍率 */
+    get effectiveSpeed(): number { return this.speed * (this.slowTimer > 0 ? this.slowFactor : 1); }
 
     drainEvents(): CoreEvent[] {
         const out = this.events;
@@ -65,12 +75,35 @@ export class GameCore {
         this.state = 'run';
     }
 
+    /** 暂停（仅 run 状态；冻结整帧推进，gTime 一并冻结） */
+    pause() {
+        if (this.state === 'run') this.paused = true;
+    }
+
+    resume() {
+        this.paused = false;
+    }
+
+    /**
+     * 减速接口：踉跄/后续减速带等触发。factor ∈ (0,1]，duration 秒。
+     * 重复调用取更缓的倍率与更长的剩余时间。
+     */
+    applySlowdown(factor: number, duration: number) {
+        if (factor <= 0 || factor > 1 || duration <= 0) {
+            throw new Error(`applySlowdown 非法参数 factor=${factor} duration=${duration}`);
+        }
+        this.slowFactor = Math.min(this.slowFactor, factor);
+        this.slowTimer = Math.max(this.slowTimer, duration);
+    }
+
     /** 死亡结算后的复活（广告发奖回调触发） */
     revive() {
         this.reviveUsed = true;
         // 清除近处障碍（z <= reviveKeepZ），保留远景
         this.obstacles = this.obstacles.filter((o) => o.z > this.cfg.player.reviveKeepZ);
         this.invincible = this.cfg.player.reviveInvincible;
+        this.stumbleTimer = 0;
+        this.slowTimer = 0; this.slowFactor = 1;
         this.state = 'run';
         this.timeScale = 1;
     }
@@ -85,26 +118,42 @@ export class GameCore {
         this.dieTimer = -1;
         this.reviveUsed = false; this.invincible = 0;
         this.milestone = c.milestone.step; this.timeScale = 1;
+        this.paused = false;
+        this.stumbleTimer = 0;
+        this.slowFactor = 1; this.slowTimer = 0;
     }
 
     // ---------- 输入意图 ----------
+    // 动作优先级（Phase 1 规则化，详见 GAME_DESIGN）：
+    //   dying/dead/paused/title：不受理任何玩法输入
+    //   run：变道 ✓ 跳 ✓（仅地面、无二段跳）滑铲 ✓
+    //   空中：变道 ✓ 滑铲 ✓（俯冲斩断跳跃）跳 ✗
+    //   滑铲中：变道 ✓ 跳 ✓（起跳取消滑铲）滑铲 ✓（重置时长）
+    //   踉跄：作为 run 的修正器存在，全部输入照常受理（受豁免无敌保护）
     doLane(dir: number) {
-        if (this.state !== 'run') return;
+        if (this.state !== 'run' || this.paused) return;
         this.targetLane = Math.max(-this.laneMax, Math.min(this.laneMax, this.targetLane + dir));
     }
     doJump() {
-        if (this.state !== 'run') return;
-        if (this.jumpT < 0) this.jumpT = 0;
+        if (this.state !== 'run' || this.paused) return;
+        if (this.jumpT < 0) {
+            this.jumpT = 0;
+            this.slideT = -1;          // 起跳取消滑铲
+            this.events.push({ type: 'jump' });
+        }
     }
     doSlide() {
-        if (this.state !== 'run') return;
+        if (this.state !== 'run' || this.paused) return;
         // 空中俯冲：斩断跳跃，快速落地
         if (this.jumpT >= 0) this.jumpT = this.cfg.player.diveJumpTo;
+        const wasSliding = this.slideT >= 0;
         this.slideT = this.cfg.player.slideDuration;
+        if (!wasSliding) this.events.push({ type: 'slideStart' });
     }
 
     // ---------- 主循环 ----------
     update(dtRaw: number) {
+        if (this.paused) return;               // 暂停：整帧冻结（含 gTime）
         const dt = Math.min(dtRaw, 0.033);
         this.gTime += dt;
         if (this.state === 'run') {
@@ -125,27 +174,37 @@ export class GameCore {
     private updateRun(dt: number) {
         const c = this.cfg;
         this.speed = c.speed.base + Math.min(this.dist * c.speed.gain, c.speed.gainCap);
-        this.dist += this.speed * dt;
+        const spd = this.effectiveSpeed;
+        // 踉跄/减速计时
+        if (this.stumbleTimer > 0) this.stumbleTimer = Math.max(0, this.stumbleTimer - dt);
+        if (this.slowTimer > 0) {
+            this.slowTimer = Math.max(0, this.slowTimer - dt);
+            if (this.slowTimer === 0) this.slowFactor = 1;
+        }
+        this.dist += spd * dt;
         if (this.li >= this.milestone) {
             this.events.push({ type: 'milestone', n: this.milestone });
             this.milestone += c.milestone.step;
         }
         if (this.invincible > 0) this.invincible -= dt;
         this.playerLaneF += (this.targetLane - this.playerLaneF) * Math.min(1, dt * c.player.laneLerp);
-        if (this.jumpT >= 0) { this.jumpT += dt / c.player.jumpDuration; if (this.jumpT >= 1) this.jumpT = -1; }
+        if (this.jumpT >= 0) {
+            this.jumpT += dt / c.player.jumpDuration;
+            if (this.jumpT >= 1) { this.jumpT = -1; this.events.push({ type: 'land' }); }
+        }
         if (this.slideT >= 0) { this.slideT -= dt; if (this.slideT < 0) this.slideT = -1; }
-        this.runPhase += dt * (6 + this.speed * 0.35);
+        this.runPhase += dt * (6 + spd * 0.35);
 
         // 生成
-        this.spawnAcc += this.speed * dt;
+        this.spawnAcc += spd * dt;
         if (this.spawnAcc > c.spawn.rowInterval) { this.spawnAcc = 0; this.spawnRow(); }
-        this.propAcc += this.speed * dt;
+        this.propAcc += spd * dt;
         if (this.propAcc > c.spawn.propInterval) { this.propAcc = 0; this.spawnProp(); }
 
         // 障碍推进 + 判定
         for (let i = this.obstacles.length - 1; i >= 0; i--) {
             const o = this.obstacles[i];
-            o.z -= this.speed * dt;
+            o.z -= spd * dt;
             if (o.z < c.world.despawnZ) { this.obstacles.splice(i, 1); continue; }
             if (!o.passed && o.z < c.obstacle.hitZ) {
                 o.passed = true;
@@ -156,15 +215,28 @@ export class GameCore {
                 if (o.lane !== myLane) safe = true;
                 else if (o.type === 'rock') safe = jumping;
                 else if (o.type === 'log') safe = sliding;
-                if (!safe && this.invincible <= 0) { this.crash(); return; }
-                if (!safe && this.invincible > 0) { o.z = -3; this.events.push({ type: 'obstacleSmashed' }); }
+                if (!safe && this.invincible <= 0) {
+                    // 受击分级：岩/横木首撞 → 踉跄（受击）；踉跄中再撞或撞墙 → 死亡
+                    const canStumble = c.player.stumble.enabled && o.type !== 'wall' && !this.stumbling;
+                    if (canStumble) {
+                        this.stumbleTimer = c.player.stumble.duration;
+                        this.invincible = c.player.stumble.mercyInvincible;
+                        this.applySlowdown(c.player.stumble.speedFactor, c.player.stumble.duration);
+                        o.z = -3;              // 击碎该障碍
+                        this.events.push({ type: 'stumble' });
+                    } else {
+                        this.crash();
+                        return;
+                    }
+                }
+                if (!safe && this.invincible > 0 && o.z !== -3) { o.z = -3; this.events.push({ type: 'obstacleSmashed' }); }
                 else if (safe && o.lane === myLane) this.events.push({ type: 'obstaclePassed' });
             }
         }
         // 阳炎拾取
         for (let i = this.fragments.length - 1; i >= 0; i--) {
             const f = this.fragments[i];
-            f.z -= this.speed * dt;
+            f.z -= spd * dt;
             if (f.z < c.world.despawnZ) { this.fragments.splice(i, 1); continue; }
             if (!f.got && f.z < c.obstacle.pickupZTo && f.z > c.obstacle.pickupZFrom
                 && Math.round(this.playerLaneF) === f.lane) {
@@ -174,7 +246,7 @@ export class GameCore {
             }
         }
         for (let i = this.props.length - 1; i >= 0; i--) {
-            this.props[i].z -= this.speed * dt;
+            this.props[i].z -= spd * dt;
             if (this.props[i].z < c.world.despawnZ) this.props.splice(i, 1);
         }
     }

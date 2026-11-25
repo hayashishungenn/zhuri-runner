@@ -21,7 +21,23 @@
     "laneLerp": 11,
     "reviveInvincible": 2.2,
     "reviveClearZ": 14,
-    "reviveKeepZ": 14
+    "reviveKeepZ": 14,
+    "stumble": {
+      "enabled": true,
+      "speedFactor": 0.45,
+      "duration": 1.8,
+      "mercyInvincible": 1.5
+    }
+  },
+  "input": {
+    "swipeMin": 18,
+    "tapMax": 8
+  },
+  "camera": {
+    "fovBase": 58,
+    "fovGain": 10,
+    "followLerp": 8,
+    "heightFollow": 0.18
   },
   "spawn": {
     "rowInterval": 8,
@@ -73,8 +89,12 @@
     "adNote": "真实场景为 15-30 秒激励视频 · 看完才发奖",
     "milestoneText": "日影渐近 · {n} 里",
     "distLabel": "已逐 {n} 里",
+    "speedLabel": "速度 {n}",
     "fragLabel": "阳炎 × {n}",
     "deadDistLabel": "已逐日 {n} 里",
-    "deadFragLabel": "拾得阳炎 × {n}"
+    "deadFragLabel": "拾得阳炎 × {n}",
+    "stumbleText": "踉跄！",
+    "pausedTitle": "暂 停",
+    "resumeBtn": "继续奔跑"
   }
 }

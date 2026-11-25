@@ -3,7 +3,7 @@
  * 职责仅装配：加载配置 → 构建 核心/输入/渲染/广告 → 每帧驱动与事件路由。
  * 玩法规则全部在 core/GameCore；画面在 render/*；平台在 platform/*。
  */
-import { _decorator, Component, Color, error } from 'cc';
+import { _decorator, Component, Color, error, game, Game as CCGame } from 'cc';
 import { loadGameConfig } from './config/GameConfig';
 import { formatUi, GameConfig } from './config/GameConfigSchema';
 import { GameCore } from './core/GameCore';
@@ -48,9 +48,24 @@ export class Game extends Component {
         if (cfg.renderMode === '2d') this.renderer = new Renderer2D(this.node, cfg);
         this.hud = new Hud2D(this.node, cfg);
         if (cfg.renderMode === '3d') this.renderer = new Renderer3D(cfg);
-        this.inputCtl = new InputController(this.makeDelegate());
+        this.inputCtl = new InputController(this.makeDelegate(), cfg.input);
         this.inputCtl.attach();
+        // 退后台自动暂停（微信 onHide / 浏览器切页），回到前台由玩家手动恢复
+        game.on(CCGame.EVENT_HIDE, this.onGameHide, this);
         log.info('装配完成');
+    }
+
+    onDestroy() {
+        this.inputCtl?.detach();
+        this.renderer?.destroy();
+        game.off(CCGame.EVENT_HIDE, this.onGameHide, this);
+    }
+
+    private onGameHide() {
+        if (this.core && this.core.state === 'run' && !this.core.paused) {
+            this.core.pause();
+            log.info('切后台自动暂停');
+        }
     }
 
     update(dtRaw: number) {
@@ -75,6 +90,8 @@ export class Game extends Component {
                 hud.showPop(LOGICAL_W / 2 + lane * 60, PLAYER_Y - 130, '+1', false, amber);
             } else if (e.type === 'milestone') {
                 hud.showPop(LOGICAL_W / 2, 250, formatUi(this.cfg!.ui.milestoneText, e.n ?? 0), true, main);
+            } else if (e.type === 'stumble') {
+                hud.showPop(LOGICAL_W / 2, 320, this.cfg!.ui.stumbleText, true, new Color(255, 122, 82, 255));
             }
         }
     }
@@ -104,6 +121,13 @@ export class Game extends Component {
             onActionStart: () => {
                 if (this.core && this.core.state === 'title') this.core.startRun();
             },
+            onActionPause: () => {
+                if (!this.core) return;
+                if (this.core.state === 'run') {
+                    if (this.core.paused) this.core.resume();
+                    else this.core.pause();
+                }
+            },
         };
     }
 
@@ -124,8 +148,4 @@ export class Game extends Component {
         }
     }
 
-    onDestroy() {
-        this.inputCtl?.detach();
-        this.renderer?.destroy();
-    }
 }

@@ -8,7 +8,7 @@ import { GameCore } from '../core/GameCore';
 import { AdService } from '../platform/AdService';
 import { DESIGN_W, DESIGN_H, LX, LY } from './layout';
 
-export type HudButton = 'start' | 'revive' | 'restart' | 'mute';
+export type HudButton = 'start' | 'revive' | 'restart' | 'mute' | 'pause' | 'resume';
 
 /** P0 面板色板（美术常量，非玩法参数） */
 const C_MAIN = () => new Color(255, 207, 125, 255);
@@ -20,9 +20,10 @@ const C_PANEL_TXT = () => new Color(240, 220, 178, 255);
 const C_PANEL_FRAG = () => new Color(184, 166, 132, 255);
 const C_BTN2 = () => new Color(232, 220, 194, 255);
 
-/** P0 按钮命中区（逻辑坐标 450x800，y 向下） */
+/** 按钮命中区（逻辑坐标 450x800，y 向下） */
 const HIT = {
     mute: { x0: 408, x1: 446, y0: 20, y1: 62 },
+    pause: { x0: 356, x1: 394, y0: 20, y1: 62 },
     start: { x0: 80, x1: 370, y0: 440, y1: 482 },
     revive: { x0: 60, x1: 390, y0: 465, y1: 500 },
     restart: { x0: 60, x1: 390, y0: 525, y1: 560 },
@@ -48,6 +49,10 @@ export class Hud2D {
     private lblAdT!: Label;
     private lblAdC!: Label;
     private lblAdN!: Label;
+    private lblSpeed!: Label;
+    private lblPaused!: Label;
+    private lblResume!: Label;
+    private lblRestart2!: Label;
     private titleOp!: UIOpacity;
     private panelOp!: UIOpacity;
     private adOp!: UIOpacity;
@@ -112,6 +117,25 @@ export class Hud2D {
         an.lbl.string = cfg.ui.adNote; this.lblAdN = an.lbl;
         an.node.setPosition(0, LY(470), 0);
         this.adOp.opacity = 0;
+
+        // 速度显示（Phase 1）
+        const sp = this.makeLabel(parent, 'hSpeed', 22, C_WHITE());
+        this.lblSpeed = sp.lbl;
+        sp.node.setPosition(LX(160), LY(95), 0);
+
+        // 暂停面板
+        const pt = this.makeLabel(parent, 'zTitle', 44, lc);
+        pt.lbl.string = cfg.ui.pausedTitle; this.lblPaused = pt.lbl;
+        pt.node.setPosition(0, LY(300), 0);
+        const pr = this.makeLabel(parent, 'zResume', 26, C_HINT());
+        pr.lbl.string = cfg.ui.resumeBtn; this.lblResume = pr.lbl;
+        pr.node.setPosition(0, LY(490), 0);
+        const pz = this.makeLabel(parent, 'zRestart', 24, C_BTN2());
+        pz.lbl.string = cfg.ui.restartBtn; this.lblRestart2 = pz.lbl;
+        pz.node.setPosition(0, LY(540), 0);
+        this.lblPaused.node.active = false;
+        this.lblResume.node.active = false;
+        this.lblRestart2.node.active = false;
     }
 
     private makeNode(parent: Node, name: string): Node {
@@ -140,6 +164,12 @@ export class Hud2D {
     hitTestButtons(gx: number, gy: number, core: GameCore): HudButton | null {
         const inRect = (r: typeof HIT.mute) => gx > r.x0 && gx < r.x1 && gy > r.y0 && gy < r.y1;
         if (inRect(HIT.mute)) return 'mute';
+        if (core.state === 'run') {
+            if (core.paused) {
+                if (inRect(HIT.revive)) return 'resume';       // 与死亡面板同行的复用布局
+                if (inRect(HIT.restart)) return 'restart';
+            } else if (inRect(HIT.pause)) return 'pause';
+        }
         if (core.state === 'title' && inRect(HIT.start)) return 'start';
         if (core.state === 'dead') {
             if (core.reviveUsable() && inRect(HIT.revive)) return 'revive';
@@ -203,6 +233,16 @@ export class Hud2D {
         this.lblDist.node.setPosition(0, LY(45), 0);
         this.lblFrag.string = formatUi(this.cfg.ui.fragLabel, core.frags);
         this.lblFrag.node.setPosition(LX(70), LY(95), 0);
+        this.lblSpeed.string = formatUi(this.cfg.ui.speedLabel, Math.round(core.effectiveSpeed));
+
+        // 暂停按钮（奔跑中且未暂停时显示 ❚❚）
+        if (core.state === 'run' && !core.paused) {
+            ui.fillColor = new Color(255, 255, 255, 32);
+            ui.circle(LX(375), LY(42), 30); ui.fill();
+            ui.fillColor = new Color(232, 220, 194, 255);
+            ui.rect(LX(366), LY(54), 6 * 1.6, 15 * 1.6); ui.fill();
+            ui.rect(LX(380), LY(54), 6 * 1.6, 15 * 1.6); ui.fill();
+        }
 
         // 静音按钮
         ui.fillColor = new Color(255, 255, 255, 32);
@@ -231,10 +271,21 @@ export class Hud2D {
         // ---------- 面板 ----------
         const showTitle = core.state === 'title';
         const showDead = core.state === 'dead';
+        const showPaused = core.state === 'run' && core.paused;
         const adShow = ad.active;
-        if (showTitle || showDead || adShow) {
+        if (showTitle || showDead || adShow || showPaused) {
             ui.fillColor = new Color(10, 8, 6, 180);
             ui.rect(-DESIGN_W / 2, -DESIGN_H / 2, DESIGN_W, DESIGN_H); ui.fill();
+        }
+        // 暂停面板
+        this.lblPaused.node.active = showPaused;
+        this.lblResume.node.active = showPaused;
+        this.lblRestart2.node.active = showPaused;
+        if (showPaused) {
+            ui.fillColor = new Color(60, 46, 30, 200);
+            ui.roundRect(LX(60), LY(465), 330 * 1.6, 50 * 1.6, 12 * 1.6); ui.fill();
+            ui.fillColor = new Color(158, 43, 30, 220);
+            ui.roundRect(LX(60), LY(525), 330 * 1.6, 50 * 1.6, 12 * 1.6); ui.fill();
         }
         this.titleOp.opacity = showTitle ? 255 : 0;
         if (showTitle) {

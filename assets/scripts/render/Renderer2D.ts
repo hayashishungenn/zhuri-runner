@@ -18,8 +18,6 @@ export class Renderer2D implements IRenderer {
     private worldG: Graphics = null!;
     private puffs: Puff[] = [];
     private fx = new ScreenFx();
-    private prevJumpT = -1;
-    private prevSlideT = -1;
     // P0 透视参数
     private static readonly PROJ_K = 1.1;
 
@@ -34,7 +32,6 @@ export class Renderer2D implements IRenderer {
     render(core: GameCore, _ad: AdService, dt: number, hud: Hud2D) {
         this.fx.update(dt, core.state, core.timeScale);
         const fdt = core.state === 'dying' ? dt * core.timeScale : dt;
-        this.trackJumps(core);
         this.updatePuffs(fdt);
         this.draw(core);
         hud.render(core, _ad, this.fx.slowAmt(core.timeScale), this.fx.redFlash);
@@ -44,19 +41,11 @@ export class Renderer2D implements IRenderer {
         this.fx.onEvents(events);
         for (const e of events) {
             if (e.type === 'crash') this.burst();
-            else if (e.type === 'fragment') this.dust();
+            else if (e.type === 'fragment' || e.type === 'jump' || e.type === 'land' || e.type === 'slideStart' || e.type === 'stumble') this.dust();
         }
     }
 
     destroy() { /* 2D 节点挂在 Canvas 下，随场景销毁 */ }
-
-    private trackJumps(core: GameCore) {
-        if (this.prevJumpT < 0 && core.jumpT >= 0) this.dust();
-        if (this.prevJumpT >= 0 && core.jumpT < 0) this.dust();
-        if (this.prevSlideT < 0 && core.slideT >= 0) this.dust();
-        this.prevJumpT = core.jumpT;
-        this.prevSlideT = core.slideT;
-    }
 
     // ---------- 粒子 ----------
     private dust() {
