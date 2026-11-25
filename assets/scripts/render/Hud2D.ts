@@ -19,7 +19,6 @@ const C_SUB = () => new Color(216, 203, 174, 255);
 const C_PANEL_TXT = () => new Color(240, 220, 178, 255);
 const C_PANEL_FRAG = () => new Color(184, 166, 132, 255);
 const C_BTN2 = () => new Color(232, 220, 194, 255);
-const C_POP_AMBER = () => new Color(255, 209, 102, 255);
 
 /** P0 按钮命中区（逻辑坐标 450x800，y 向下） */
 const HIT = {
