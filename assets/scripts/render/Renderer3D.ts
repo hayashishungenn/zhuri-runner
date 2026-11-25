@@ -1,12 +1,12 @@
 /**
- * Renderer3D —— 真3D 第三人称渲染（默认渲染器）。
- * 运行时构建，不依赖编辑器手工摆场景：
- * - 透视相机（第三人称背身追尾：位置/旋转插值、跳跃高度跟随、速度相关 fov、震屏）
- * - 平行光（unlit 阶段不参与光照，为 P2 标准材质预留）+ 分段色带天空墙 + 星空 + 太阳 + 远山
- * - 跑道/车道虚线/障碍/阳炎/侧景 全部 primitives 几何体 + builtin-unlit 纯色材质
- * - 角色动画经 CharacterAnimator 接口（ProceduralKuafu 程序化实现，可整体替换）
- * - 实体世界定位经 TrackPath（StraightPath；P2 转弯实现同一接口即可）
- * 只读核心状态；实体节点池化，透明材质不用于 3D 层（见 KNOWN_ISSUES）。
+ * Renderer3D —— 真3D 第三人称渲染（默认渲染器）。Phase 2：无限地图版。
+ *
+ * - 世界空间由核心层 SegmentPath 承载（直/弧/坡/桥/崖/洞）；本层所有摆放经 path.sample
+ * - 分段跑道：每 Segment 一条 ribbon 网格（沿中心线采样左右边线），随生成/回收同步
+ * - 世界原点重定位：WorldShift 阈值重定位，全场景 render = abs − shift（float32 精度防护）
+ * - 天空锚点跟随玩家位置与航向（色带/星空/太阳/远山永远"在远方"）
+ * - 相机：路径后方跟随（位置插值、跳跃高度跟随、速度 fov、震屏上限、转弯自然摇移）
+ * - 角色动画经 CharacterAnimator 接口；实体池化；透明材质不用于 3D 层
  */
 import { Node, Camera, MeshRenderer, Material, Mesh, Color, Vec3, Layers, director, utils, primitives, DirectionalLight } from 'cc';
 import { GameConfig } from '../config/GameConfigSchema';
@@ -16,31 +16,39 @@ import { IRenderer } from './IRenderer';
 import { Hud2D } from './Hud2D';
 import { ScreenFx } from './ScreenFx';
 import { Obstacle, Fragment, Prop } from '../core/types';
-import { StraightPath } from '../core/track';
+import { TrackSegment, PathSample } from '../core/track';
 import { CharAnimState } from './CharacterAnimator';
 import { ProceduralKuafu } from './ProceduralKuafu';
+import { WorldShift } from '../core/WorldShift';
 
-// ---------- 世界尺度（逻辑单位 → 3D 世界单位） ----------
-const LANE_W3 = 1.7;        // 一车道宽度
-const Z_SCALE = 0.55;       // 逻辑 z → 世界 z（远离玩家为负）
-const CAM_Y = 4.1;          // 相机基准高度
-const CAM_Z = 7.4;          // 相机基准距离
-const LOOK_Y = 1.1;         // 视线目标高度
-const HOP_U = 1.42;         // 跳跃高度（对应 P0 92px）
-void HOP_U;                 // 跳跃高度现由 Animator 计算（lastHop），保留常量作尺度文档
+// ---------- 世界尺度 ----------
+const LANE_W3 = 1.7;
+const CAM_Y = 4.1;
+/** 相机在玩家后方的路径距离（逻辑单位）：世界 7.4 / Z_SCALE 0.55 */
+const CAM_BACK_D = 13.4;
+const LOOK_Y = 1.1;
+const BEHIND_HIDE_Z = 0.5;
+const DEG = 57.29578;
 
-// ---------- 尺寸 ----------
-const TRACK_HALF_W = 2.94;  // runwayHalf 190px
-const TRACK_LEN = 30;
-const DASH_STEP = 3.2;      // 同车道虚线间距
+/** 主题跑道色板（theme 取模循环） */
+const THEME_TRACK: [number, number, number][] = [
+    [58, 34, 20],    // 黄昏（默认）
+    [40, 24, 18],    // 夜
+    [72, 38, 24],    // 黎明
+];
+const THEME_CURB: [number, number, number][] = [
+    [255, 170, 90], [140, 110, 160], [255, 190, 120],
+];
+
+const DASH_STEP = 3.2;
 const DASH_PER_LANE = 9;
 const DASH_COUNT = DASH_PER_LANE * 2;
-const DASH_SPAN = DASH_PER_LANE * DASH_STEP;
-/** 玩家身后（世界 z > 该值）即隐藏，防止实体穿过镜头（穿模防护） */
-const BEHIND_HIDE_Z = 0.5;
 
 interface Rec { kind: string; node: Node; }
 interface Puff3 { node: Node; x: number; y: number; z: number; vx: number; vy: number; life: number; max: number; }
+
+/** 分段跑道视图：ribbon 网格 + 特殊地块装饰（桥墩/洞拱/崖栏/过渡牌） */
+interface SegView { node: Node; mesh: Mesh | null; decors: Node[]; }
 
 export class Renderer3D implements IRenderer {
     private cfg: GameConfig;
@@ -48,26 +56,29 @@ export class Renderer3D implements IRenderer {
     private camNode!: Node;
     private cam!: Camera;
     private fx = new ScreenFx();
-    private path: StraightPath;
+    private world = new WorldShift();
 
-    // 共享几何体
     private mBox!: Mesh; private mSphere!: Mesh; private mCone!: Mesh;
     private mCyl!: Mesh; private mQuad!: Mesh;
     private matCache = new Map<string, Material>();
 
-    // 池
     private pools = new Map<string, Node[]>();
     private obRecs = new Map<Obstacle, Rec>();
     private fragRecs = new Map<Fragment, Rec>();
     private propRecs = new Map<Prop, Rec>();
 
-    // 车道虚线
     private dashes: Node[] = [];
+    private skyAnchor!: Node;
+    private ground!: Node;
+    private skyBands: { node: Node; t: number }[] = [];
+    private stars: { node: Node; phase: number; base: number }[] = [];
+    private sunNodes: Node[] = [];
 
-    // 角色（动画接口）
     private kuafu!: ProceduralKuafu;
+    private segViews = new Map<TrackSegment, SegView>();
+    private segNodePool: Node[] = [];
+    private decorPools = new Map<string, Node[]>();
 
-    // 尘土
     private puffs: Puff3[] = [];
     private puffPool: Node[] = [];
 
@@ -77,13 +88,11 @@ export class Renderer3D implements IRenderer {
 
     constructor(cfg: GameConfig) {
         this.cfg = cfg;
-        this.path = new StraightPath(LANE_W3, Z_SCALE);
         this.buildScene();
     }
 
     // ---------- 材质/几何 ----------
-    private mat(rgb: [number, number, number]): Material {
-        const key = rgb.join(',');
+    private mat(key: string, rgb: [number, number, number]): Material {
         let m = this.matCache.get(key);
         if (!m) {
             m = new Material();
@@ -94,25 +103,16 @@ export class Renderer3D implements IRenderer {
         return m;
     }
 
-    /** 独立材质实例（需要每帧改色/互相独立的对象，如天空色带） */
-    private matUnique(rgb: [number, number, number]): Material {
-        const m = new Material();
-        m.initialize({ effectName: 'builtin-unlit' });
-        m.setProperty('mainColor', new Color(rgb[0], rgb[1], rgb[2], 255));
-        return m;
-    }
-
-    private node3d(parent: Node, name: string, mesh: Mesh, rgb: [number, number, number], uniqueMat = false): Node {
+    private node3d(parent: Node, name: string, mesh: Mesh, rgb: [number, number, number], matKey?: string): Node {
         const n = new Node(name);
         n.layer = Layers.Enum.DEFAULT;
         n.setParent(parent);
         const mr = n.addComponent(MeshRenderer);
         mr.mesh = mesh;
-        mr.material = uniqueMat ? this.matUnique(rgb) : this.mat(rgb);
+        mr.material = this.mat(matKey ?? rgb.join(','), rgb);
         return n;
     }
 
-    /** ProceduralKuafu 的几何工厂适配 */
     private makePart = (parent: Node, name: string, kind: 'box' | 'sphere' | 'cyl' | 'cone', rgb: [number, number, number]): Node => {
         const mesh = kind === 'box' ? this.mBox : kind === 'sphere' ? this.mSphere : kind === 'cone' ? this.mCone : this.mCyl;
         return this.node3d(parent, name, mesh, rgb);
@@ -131,7 +131,6 @@ export class Renderer3D implements IRenderer {
         this.root3d.layer = Layers.Enum.DEFAULT;
         scene.addChild(this.root3d);
 
-        // 相机：第三人称背身
         this.camNode = new Node('cam3d');
         this.camNode.layer = Layers.Enum.DEFAULT;
         this.root3d.addChild(this.camNode);
@@ -140,13 +139,12 @@ export class Renderer3D implements IRenderer {
         this.cam.fov = this.cfg.camera.fovBase;
         this.cam.near = 0.3;
         this.cam.far = 600;
-        this.cam.priority = 0;                      // 先于 UI 相机渲染
+        this.cam.priority = 0;
         this.cam.clearFlags = Camera.ClearFlag.SOLID_COLOR;
         this.cam.clearColor = new Color(255, 154, 60, 255);
-        this.camNode.setPosition(0, CAM_Y, CAM_Z);
+        this.camNode.setPosition(0, CAM_Y, 7.4);
         this.camNode.lookAt(new Vec3(0, LOOK_Y, -3));
 
-        // 平行光：当前材质全部 builtin-unlit（不参与光照），为 P2 标准材质预留
         const lightNode = new Node('sunLight');
         lightNode.layer = Layers.Enum.DEFAULT;
         this.root3d.addChild(lightNode);
@@ -154,74 +152,231 @@ export class Renderer3D implements IRenderer {
         dirLight.illuminance = 2.2;
         lightNode.setRotationFromEuler(-42, 118, 0);
 
-        this.buildSky();
-        this.buildTrack();
+        this.skyAnchor = new Node('skyAnchor');
+        this.skyAnchor.layer = Layers.Enum.DEFAULT;
+        this.root3d.addChild(this.skyAnchor);
+        this.buildSky(this.skyAnchor);
+        this.buildGround();
+        this.buildDashes();
         this.kuafu = new ProceduralKuafu(this.makePart, this.root3d);
     }
 
-    private skyBands: { node: Node; t: number }[] = [];
-    private stars: { node: Node; phase: number; base: number }[] = [];
-    private sunNodes: Node[] = [];
-
-    private buildSky() {
-        // 分段色带天空墙（P0 渐变色板）
+    private buildSky(anchor: Node) {
         const bands = 10;
-        const H = 9, Y0 = 0, Z = -190;
+        const H = 9, Y0 = -2, Z = -190;
         for (let i = 0; i < bands; i++) {
-            const b = this.node3d(this.root3d, `sky${i}`, this.mQuad, [255, 255, 255], true);
+            const b = this.node3d(anchor, `sky${i}`, this.mQuad, [255, 255, 255], `sky${i}`);
             b.setPosition(0, Y0 + (i + 0.5) * H, Z);
             b.setScale(600, H, 1);
             this.skyBands.push({ node: b, t: i / (bands - 1) });
         }
-        // 星星
         for (let i = 0; i < 30; i++) {
-            const st = this.node3d(this.root3d, `star${i}`, this.mSphere, [255, 255, 255]);
+            const st = this.node3d(anchor, `star${i}`, this.mSphere, [255, 255, 255]);
             st.setPosition(((i * 137) % 240) - 120, 24 + ((i * 53) % 66), -170);
             const r = 0.25 + (i % 3) * 0.1;
             st.setScale(r, r, r);
             this.stars.push({ node: st, phase: i * 1.7, base: r });
         }
-        // 太阳（球体 + 外层浅色晕环替代）
-        const sun = this.node3d(this.root3d, 'sun', this.mSphere, [255, 217, 138]);
+        const sun = this.node3d(anchor, 'sun', this.mSphere, [255, 217, 138], 'sun');
         sun.setPosition(0, 10, -160); sun.setScale(12, 12, 12);
-        const halo = this.node3d(this.root3d, 'sunHalo', this.mSphere, [255, 170, 90]);
+        const halo = this.node3d(anchor, 'sunHalo', this.mSphere, [255, 170, 90], 'halo');
         halo.setPosition(0, 10, -160.5); halo.setScale(15.5, 15.5, 15.5);
         this.sunNodes.push(sun, halo);
-        // 远山（两层锥体）
         const ridge1: [number, number, number][] = [[-70, 16, -150], [-30, 22, -160], [15, 18, -155], [55, 24, -165], [95, 15, -150]];
         const ridge2: [number, number, number][] = [[-100, 20, -135], [-55, 13, -128], [0, 16, -132], [45, 12, -126], [85, 19, -138]];
         for (const [x, h, z] of ridge1) {
-            const m = this.node3d(this.root3d, 'mt1', this.mCone, [60, 22, 20]);
+            const m = this.node3d(anchor, 'mt1', this.mCone, [60, 22, 20], 'mt1');
             m.setPosition(x, h / 2, z); m.setScale(h * 0.9, h, h * 0.9);
         }
         for (const [x, h, z] of ridge2) {
-            const m = this.node3d(this.root3d, 'mt2', this.mCone, [40, 16, 14]);
+            const m = this.node3d(anchor, 'mt2', this.mCone, [40, 16, 14], 'mt2');
             m.setPosition(x, h / 2, z); m.setScale(h * 0.9, h, h * 0.9);
         }
     }
 
-    private buildTrack() {
-        // 地面
-        const ground = this.node3d(this.root3d, 'ground', this.mBox, [45, 26, 15]);
-        ground.setPosition(0, -0.15, -110); ground.setScale(500, 0.3, 280);
-        // 跑道
-        const track = this.node3d(this.root3d, 'track', this.mBox, [58, 34, 20]);
-        track.setPosition(0, 0.01, -TRACK_LEN / 2 + 2.5); track.setScale(TRACK_HALF_W * 2, 0.1, TRACK_LEN);
-        // 路缘
-        for (const side of [-1, 1]) {
-            const curb = this.node3d(this.root3d, 'curb', this.mBox, [255, 170, 90]);
-            curb.setPosition(side * TRACK_HALF_W, 0.06, -TRACK_LEN / 2 + 2.5);
-            curb.setScale(0.16, 0.14, TRACK_LEN);
-        }
-        // 车道虚线（动态滚动）
+    private buildGround() {
+        this.ground = this.node3d(this.root3d, 'ground', this.mBox, [45, 26, 15], 'ground');
+        this.ground.setPosition(0, -0.15, -110);
+        this.ground.setScale(500, 0.3, 280);
+    }
+
+    private buildDashes() {
         for (let i = 0; i < DASH_COUNT; i++) {
-            const d = this.node3d(this.root3d, 'dash', this.mBox, [255, 210, 140]);
+            const d = this.node3d(this.root3d, 'dash', this.mBox, [255, 210, 140], 'dash');
             d.setScale(0.06, 0.02, 0.7);
             this.dashes.push(d);
         }
     }
 
-    // ---------- 池化 ----------
+    // ---------- 分段跑道视图 ----------
+    private releaseDecor(kind: string, n: Node) {
+        n.setParent(null);
+        let pool = this.decorPools.get(kind);
+        if (!pool) { pool = []; this.decorPools.set(kind, pool); }
+        pool.push(n);
+    }
+    private acquireDecor(kind: string, rgb: [number, number, number]): Node {
+        const pool = this.decorPools.get(kind);
+        if (pool && pool.length) { const n = pool.pop()!; n.setParent(this.root3d); return n; }
+        const mesh = kind === 'post' ? this.mBox : this.mCyl;
+        return this.node3d(this.root3d, kind, mesh, rgb, kind);
+    }
+
+    private releaseSegView(view: SegView) {
+        for (const d of view.decors) this.releaseDecor(d.name, d);
+        view.decors.length = 0;
+        if (view.mesh) { view.mesh.destroy(); view.mesh = null; }
+        view.node.setParent(null);
+        this.segNodePool.push(view.node);
+    }
+
+    private acquireSegNode(): Node {
+        const n = this.segNodePool.pop();
+        if (n) { n.setParent(this.root3d); return n; }
+        const nn = new Node('seg');
+        nn.layer = Layers.Enum.DEFAULT;
+        this.root3d.addChild(nn);
+        return nn;
+    }
+
+    /** 沿地块中心线构建路面 ribbon 网格（顶点相对地块入口，配合 shift 放置） */
+    private buildRibbonMesh(seg: TrackSegment): Mesh {
+        const path = this.core!.path;
+        const n = Math.max(6, Math.ceil(seg.length / 2));
+        const positions: number[] = [];
+        const indices: number[] = [];
+        const ex = seg.entry.x, ey = seg.entry.y, ez = seg.entry.z;
+        for (let i = 0; i <= n; i++) {
+            const p = path.sample(seg.startD + seg.length * (i / n), 0);
+            const rx = Math.cos(p.heading), rz = -Math.sin(p.heading);
+            const hw = seg.halfWidth;
+            positions.push(p.x - rx * hw - ex, p.y + 0.02 - ey, p.z - rz * hw - ez);
+            positions.push(p.x + rx * hw - ex, p.y + 0.02 - ey, p.z + rz * hw - ez);
+            if (i > 0) {
+                const a = (i - 1) * 2;
+                indices.push(a, a + 2, a + 1, a + 1, a + 2, a + 3);
+            }
+        }
+        return utils.MeshUtils.createMesh({ positions, indices } as never);
+    }
+
+    /** 边缘窄带（路缘）：laneOffset 处宽 w 的条带 */
+    private buildEdgeRibbon(seg: TrackSegment, laneOffset: number, w: number): Mesh {
+        const path = this.core!.path;
+        const n = Math.max(6, Math.ceil(seg.length / 2));
+        const positions: number[] = [];
+        const indices: number[] = [];
+        const ex = seg.entry.x, ey = seg.entry.y, ez = seg.entry.z;
+        for (let i = 0; i <= n; i++) {
+            const p = path.sample(seg.startD + seg.length * (i / n), laneOffset);
+            const rx = Math.cos(p.heading), rz = -Math.sin(p.heading);
+            positions.push(p.x - rx * w - ex, p.y + 0.03 - ey, p.z - rz * w - ez);
+            positions.push(p.x + rx * w - ex, p.y + 0.03 - ey, p.z + rz * w - ez);
+            if (i > 0) {
+                const a = (i - 1) * 2;
+                indices.push(a, a + 2, a + 1, a + 1, a + 2, a + 3);
+            }
+        }
+        return utils.MeshUtils.createMesh({ positions, indices } as never);
+    }
+
+    private createSegView(seg: TrackSegment): SegView {
+        const path = this.core!.path;
+        const node = this.acquireSegNode();
+        const view: SegView = { node, mesh: null, decors: [] };
+        // ribbon（主题配色）
+        const ribbon = new Node('ribbon');
+        ribbon.layer = Layers.Enum.DEFAULT;
+        ribbon.setParent(node);
+        const mr = ribbon.addComponent(MeshRenderer);
+        view.mesh = this.buildRibbonMesh(seg);
+        mr.mesh = view.mesh;
+        const theme = seg.theme % THEME_TRACK.length;
+        mr.material = this.mat(`ribbon${theme}`, THEME_TRACK[theme]);
+        const entryR = this.world.toRender(seg.entry);
+        node.setPosition(entryR.x, entryR.y, entryR.z);
+
+        // 路缘条（两侧窄带）
+        for (const side of [-1, 1]) {
+            const curb = new Node(`curb${side}`);
+            curb.layer = Layers.Enum.DEFAULT;
+            curb.setParent(node);
+            const cmr = curb.addComponent(MeshRenderer);
+            cmr.mesh = this.buildEdgeRibbon(seg, side * (seg.halfWidth + 0.12), 0.16);
+            cmr.material = this.mat(`curb${theme}`, THEME_CURB[theme]);
+        }
+
+        // 特殊地块装饰（位置相对入口）
+        const addDecor = (kind: string, rgb: [number, number, number], dAbs: number, lane: number,
+            place: (n: Node, p: PathSample, dy: number) => void) => {
+            const dn = this.acquireDecor(kind, rgb);
+            dn.setParent(node);
+            const p = path.sample(dAbs, lane);
+            dn.setRotationFromEuler(0, p.heading * DEG, 0);
+            const dx = p.x - seg.entry.x, dy = p.y - seg.entry.y, dz = p.z - seg.entry.z;
+            place(dn, p, dy);
+            dn.setPosition(dx, dy, dz);
+            view.decors.push(dn);
+        };
+
+        if (seg.kind === 'bridge') {
+            const steps = Math.max(2, Math.round(seg.length / 8));
+            for (let i = 0; i <= steps; i++) {
+                const dAbs = seg.startD + (seg.length * i) / steps;
+                for (const side of [-1, 1]) {
+                    addDecor('pillar', [46, 30, 18], dAbs, side * (seg.halfWidth - 0.15), (n, p, dy) => {
+                        const h = (p.y + 0.3) / 1;
+                        n.setScale(0.22, h, 0.22);
+                        n.setPosition(0, -h / 2, 0);   // 桥墩落到地面（相对地块面）
+                        void dy;
+                    });
+                }
+            }
+        } else if (seg.kind === 'cave') {
+            const steps = Math.max(2, Math.round(seg.length / 6));
+            for (let i = 0; i <= steps; i++) {
+                const dAbs = seg.startD + (seg.length * i) / steps;
+                addDecor('arch', [30, 16, 12], dAbs, 0, (n, _p, dy) => {
+                    n.setScale(seg.halfWidth * 2 + 0.6, 0.5, 0.5);
+                    n.setPosition(0, dy + 2.6, 0);
+                });
+            }
+        } else if (seg.kind === 'cliff') {
+            const steps = Math.max(2, Math.round(seg.length / 6));
+            for (let i = 0; i <= steps; i++) {
+                const dAbs = seg.startD + (seg.length * i) / steps;
+                addDecor('post', [70, 42, 26], dAbs, seg.halfWidth, (n, _p, dy) => {
+                    n.setScale(0.18, 0.9, 0.18);
+                    n.setPosition(0, dy + 0.45, 0);
+                });
+            }
+        } else if (seg.kind === 'transition') {
+            const mid = seg.startD + seg.length / 2;
+            addDecor('banner', [120, 60, 40], mid, 0, (n, _p, dy) => {
+                n.setScale(seg.halfWidth * 2, 0.5, 0.3);
+                n.setPosition(0, dy + 2.8, 0);
+            });
+            for (const side of [-1, 1]) {
+                addDecor('pillar', [90, 50, 30], mid, side * (seg.halfWidth + 0.2), (n, _p, dy) => {
+                    n.setScale(0.2, 2.8, 0.2);
+                    n.setPosition(0, dy + 1.4, 0);
+                });
+            }
+        }
+        return view;
+    }
+
+    private updateSegViews() {
+        const segs = this.core!.path.segments;
+        for (const [seg, view] of this.segViews) {
+            if (segs.indexOf(seg) < 0) { this.releaseSegView(view); this.segViews.delete(seg); }
+        }
+        for (const seg of segs) {
+            if (!this.segViews.has(seg)) this.segViews.set(seg, this.createSegView(seg));
+        }
+    }
+
+    // ---------- 池化实体 ----------
     private acquire(kind: string): Node {
         const pool = this.pools.get(kind);
         const n = pool && pool.length ? pool.pop()! : this.createEntityNode(kind);
@@ -236,7 +391,6 @@ export class Renderer3D implements IRenderer {
         pool.push(n);
     }
     private createEntityNode(kind: string): Node {
-        // 约定：容器节点锚点在地面（y=0），几何体作为子节点摆放
         switch (kind) {
         case 'rock': {
             const n = new Node('rock');
@@ -323,6 +477,7 @@ export class Renderer3D implements IRenderer {
         this.dt = dt;
         this.fx.update(dt, core.state, core.timeScale);
         this.updatePuffs(dt * (core.state === 'dying' ? core.timeScale : 1));
+        this.updateSegViews();
         this.syncEntities();
         this.placeEntities(core);
         this.placeKuafu(core);
@@ -341,43 +496,48 @@ export class Renderer3D implements IRenderer {
     }
 
     destroy() {
+        for (const [, view] of this.segViews) {
+            if (view.mesh) view.mesh.destroy();
+        }
         this.kuafu.destroy();
         this.root3d?.destroy();
         this.matCache.clear();
     }
 
-    // ---------- 摆放（经 TrackPath，为转弯预留） ----------
+    // ---------- 摆放（全部经 path.sample + WorldShift） ----------
     private placeEntities(core: GameCore) {
         for (const [o, rec] of this.obRecs) {
-            const s = this.path.sample(o.z, o.lane);
-            rec.node.setPosition(s.x, 0, s.z);
-            // 穿模防护：越过玩家身后即隐藏（回收由核心 despawn 驱动）
-            rec.node.active = s.z < BEHIND_HIDE_Z;
+            const p = core.path.sample(core.dist + o.z, o.lane * LANE_W3);
+            const r = this.world.toRender(p);
+            rec.node.setPosition(r.x, r.y, r.z);
+            rec.node.setRotationFromEuler(0, p.heading * DEG, 0);
+            rec.node.active = o.z > BEHIND_HIDE_Z;
         }
         for (const [f, rec] of this.fragRecs) {
-            const s = this.path.sample(f.z, f.lane);
+            const p = core.path.sample(core.dist + f.z, f.lane * LANE_W3);
+            const r = this.world.toRender(p);
             const sz = 0.32 * (1 + Math.sin(core.gTime * 5 + f.z) * 0.12);
-            rec.node.setPosition(s.x, 0.85 + Math.sin(core.gTime * 3 + f.z) * 0.08, s.z);
+            rec.node.setPosition(r.x, r.y + 0.85 + Math.sin(core.gTime * 3 + f.z) * 0.08, r.z);
             rec.node.setScale(sz, sz, sz);
-            rec.node.active = s.z < BEHIND_HIDE_Z;
+            rec.node.active = f.z > BEHIND_HIDE_Z;
         }
-        for (const [p, rec] of this.propRecs) {
-            const s = this.path.sample(p.z, p.x);
-            const sway = Math.sin(core.gTime * 1.6 + p.sway) * 0.02;
-            rec.node.setPosition(s.x, 0, s.z);
-            rec.node.setScale(p.s, p.s, p.s);
-            rec.node.setRotationFromEuler(0, 0, sway * 60);
-            rec.node.active = s.z < BEHIND_HIDE_Z;
+        for (const [pp, rec] of this.propRecs) {
+            const p = core.path.sample(core.dist + pp.z, pp.x * LANE_W3);
+            const r = this.world.toRender(p);
+            const sway = Math.sin(core.gTime * 1.6 + pp.sway) * 0.02;
+            rec.node.setPosition(r.x, r.y, r.z);
+            rec.node.setScale(pp.s, pp.s, pp.s);
+            rec.node.setRotationFromEuler(0, p.heading * DEG, sway * 60);
+            rec.node.active = pp.z > BEHIND_HIDE_Z;
         }
     }
 
     private placeKuafu(core: GameCore) {
-        const s = this.path.sample(0, core.playerLaneF);
-        this.playerX = s.x;
-        this.kuafu.root.setPosition(s.x, 0, s.z);
-        // 无敌闪烁（复活/踉跄豁免期）
+        const p = core.path.sample(core.dist, core.playerLaneF * LANE_W3);
+        const r = this.world.toRender(p);
+        this.playerX = r.x;
+        this.kuafu.root.setPosition(r.x, r.y, r.z);
         this.kuafu.setVisible(!(core.invincible > 0 && Math.floor(core.gTime * 10) % 2 === 0));
-        // 动画状态推导（接口输入，本层不涉动作逻辑）
         const animState: CharAnimState =
             core.state === 'dying' || core.state === 'dead' ? 'dead'
                 : core.state === 'title' ? 'idle'
@@ -393,17 +553,17 @@ export class Renderer3D implements IRenderer {
             slideT: core.slideT,
             stumbleT: core.stumbleTimer,
             gTime: core.gTime,
+            yawDeg: p.heading * DEG,
         });
-        // 影子跟随车道
-        this.kuafu.shadow.setPosition(s.x, 0.02, s.z);
+        this.kuafu.shadow.setPosition(r.x, r.y + 0.02, r.z);
     }
 
     // ---------- 尘土 ----------
     private dust() {
         for (let i = 0; i < 6; i++) {
             const node = this.puffPool.pop() ?? this.node3d(this.root3d, 'puff', this.mSphere, [138, 106, 72]);
-            const r = 0.06 + Math.random() * 0.08;
-            node.setScale(r, r, r);
+            const rr = 0.06 + Math.random() * 0.08;
+            node.setScale(rr, rr, rr);
             node.active = true;
             this.puffs.push({
                 node,
@@ -416,8 +576,8 @@ export class Renderer3D implements IRenderer {
     private burst() {
         for (let i = 0; i < 14; i++) {
             const node = this.puffPool.pop() ?? this.node3d(this.root3d, 'puff', this.mSphere, [138, 106, 72]);
-            const r = 0.08 + Math.random() * 0.12;
-            node.setScale(r, r, r);
+            const rr = 0.08 + Math.random() * 0.12;
+            node.setScale(rr, rr, rr);
             node.active = true;
             this.puffs.push({
                 node,
@@ -444,14 +604,20 @@ export class Renderer3D implements IRenderer {
 
     // ---------- 天空/虚线/相机 ----------
     private updateSky(core: GameCore) {
-        const p = core.skyP;
+        const p = core.path.sample(core.dist, 0);
+        const rp = this.world.toRender(p);
+        // 天空锚点跟随玩家位置与航向（色带/星空/太阳始终"在远方"）
+        this.skyAnchor.setPosition(rp.x, rp.y, rp.z);
+        this.skyAnchor.setRotationFromEuler(0, p.heading * DEG, 0);
+        this.ground.setPosition(rp.x, -0.15, rp.z);
+
+        const prog = core.skyP;
         const mix = (a: number[], b: number[], t: number) => [
             a[0] + (b[0] - a[0]) * t, a[1] + (b[1] - a[1]) * t, a[2] + (b[2] - a[2]) * t];
-        // P0 天空三段渐变色板
         const seg = (t: number): number[] => {
-            if (t < 0.45) return mix([25, 18, 51], mix([90, 32, 40], [70, 40, 80], p), t / 0.45);
-            if (t < 0.8) return mix(mix([90, 32, 40], [70, 40, 80], p), mix([196, 78, 36], [160, 60, 44], p), (t - 0.45) / 0.35);
-            return mix(mix([196, 78, 36], [160, 60, 44], p), mix([255, 154, 60], [255, 130, 60], p), (t - 0.8) / 0.2);
+            if (t < 0.45) return mix([25, 18, 51], mix([90, 32, 40], [70, 40, 80], prog), t / 0.45);
+            if (t < 0.8) return mix(mix([90, 32, 40], [70, 40, 80], prog), mix([196, 78, 36], [160, 60, 44], prog), (t - 0.45) / 0.35);
+            return mix(mix([196, 78, 36], [160, 60, 44], prog), mix([255, 154, 60], [255, 130, 60], prog), (t - 0.8) / 0.2);
         };
         for (const b of this.skyBands) {
             const c = seg(b.t);
@@ -459,50 +625,55 @@ export class Renderer3D implements IRenderer {
         }
         const twinkle = (phase: number) => 0.55 + 0.45 * Math.sin(core.gTime * 2 + phase);
         for (const s of this.stars) {
-            const k = s.base * (0.6 + 0.6 * twinkle(s.phase)) * (1 - p * 0.8);   // 天亮星隐
+            const k = s.base * (0.6 + 0.6 * twinkle(s.phase)) * (1 - prog * 0.8);
             s.node.setScale(k, k, k);
         }
-        const sunScale = 12 + p * 10;
+        const sunScale = 12 + prog * 10;
         this.sunNodes[0].setScale(sunScale, sunScale, sunScale);
         this.sunNodes[1].setScale(sunScale * 1.3, sunScale * 1.3, sunScale * 1.3);
         this.cam.clearColor = new Color(
             Math.round(seg(1)[0]), Math.round(seg(1)[1]), Math.round(seg(1)[2]), 255);
     }
 
+    /** 车道虚线：固定在路径网格上的真实路面标记（随转弯弯曲），玩家身后裁剪 */
     private updateDashes(core: GameCore) {
-        const scroll = (core.gTime * core.effectiveSpeed * Z_SCALE) % DASH_STEP;
+        const base = Math.floor(core.dist / DASH_STEP) * DASH_STEP;
         for (let i = 0; i < DASH_COUNT; i++) {
-            const d = this.dashes[i];
             const k = Math.floor(i / 2);
-            let z = 1 - k * DASH_STEP - scroll;
-            if (z < 1 - DASH_SPAN) z += DASH_SPAN;
-            d.setPosition(i % 2 === 0 ? -0.85 : 0.85, 0.07, z);
+            const d = base + 2 + k * DASH_STEP;
+            const p = core.path.sample(d, i % 2 === 0 ? -0.85 : 0.85);
+            const r = this.world.toRender(p);
+            const dn = this.dashes[i];
+            dn.setPosition(r.x, r.y + 0.05, r.z);
+            dn.setRotationFromEuler(0, p.heading * DEG, 0);
+            dn.active = d - core.dist < 26;
         }
     }
 
-    /**
-     * 相机：位置插值（水平跟随 + 跳跃高度跟随）、速度相关 fov、震屏。
-     * 全部按 dt 插值 —— 高低帧率一致；抖动有上限防持续抖动。
-     */
+    /** 相机：路径后方跟随（转弯自然摇移）、dt 插值、跳跃高度跟随、速度 fov、震屏上限 */
     private updateCamera(core: GameCore) {
         const cc = this.cfg.camera;
-        const targetX = core.playerLaneF * LANE_W3 * 0.45;
+        const camD = Math.max(0, core.dist - CAM_BACK_D);
+        const camP = core.path.sample(camD, core.playerLaneF * LANE_W3 * 0.45);
         const hop = this.kuafu.lastHop;
-        const targetY = CAM_Y + hop * cc.heightFollow;
+        const targetY = camP.y + CAM_Y + hop * cc.heightFollow;
         const cur = this.camNode.position;
         const k = Math.min(1, this.dt * cc.followLerp);
-        const nx = cur.x + (targetX - cur.x) * k;
+        const rc = this.world.toRender(camP);
+        const nx = cur.x + (rc.x - cur.x) * k;
         const ny = cur.y + (targetY - cur.y) * k;
+        const nz = cur.z + (rc.z - cur.z) * k;
         const shake = this.fx.shake > 0.3 ? Math.min(this.fx.shake * 0.012, 0.25) : 0;
         this.camNode.setPosition(
             nx + (Math.random() - 0.5) * shake,
             ny + (Math.random() - 0.5) * shake,
-            CAM_Z,
+            nz + (Math.random() - 0.5) * shake,
         );
-        // 速度相关视野：速度公式值归一（base → base+gainCap）
         const spN = Math.max(0, Math.min(1, (core.speed - this.cfg.speed.base) / Math.max(this.cfg.speed.gainCap, 0.001)));
         const targetFov = cc.fovBase + cc.fovGain * spN;
         this.cam.fov += (targetFov - this.cam.fov) * Math.min(1, this.dt * 3);
-        this.camNode.lookAt(new Vec3(core.playerLaneF * LANE_W3 * 0.6, LOOK_Y, -3));
+        const lookP = core.path.sample(core.dist + 3, core.playerLaneF * LANE_W3 * 0.6);
+        const rl = this.world.toRender(lookP);
+        this.camNode.lookAt(new Vec3(rl.x, rl.y + LOOK_Y, rl.z));
     }
 }

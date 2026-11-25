@@ -235,6 +235,23 @@ export class Hud2D {
         this.lblFrag.node.setPosition(LX(70), LY(95), 0);
         this.lblSpeed.string = formatUi(this.cfg.ui.speedLabel, Math.round(core.effectiveSpeed));
 
+        // 路口转向提示（窗口开启时显示方向箭头）
+        if (core.state === 'run' && core.turnWindow) {
+            const dir = core.turnWindow.dir;
+            const cx = LX(225), cy = LY(230);
+            const a = 46 * 1.6, b = 26 * 1.6;
+            ui.fillColor = new Color(255, 209, 102, 210 + Math.floor(Math.sin(core.gTime * 9) * 40));
+            if (dir === 1) {          // 左转箭头 ◀
+                ui.moveTo(cx - a, cy); ui.lineTo(cx + b * 0.4, cy + b); ui.lineTo(cx + b * 0.4, cy - b);
+                ui.close(); ui.fill();
+                ui.rect(cx + b * 0.4, cy - 7, 30 * 1.6, 14); ui.fill();
+            } else {                  // 右转箭头 ▶
+                ui.moveTo(cx + a, cy); ui.lineTo(cx - b * 0.4, cy + b); ui.lineTo(cx - b * 0.4, cy - b);
+                ui.close(); ui.fill();
+                ui.rect(cx - b * 0.4 - 30 * 1.6, cy - 7, 30 * 1.6, 14); ui.fill();
+            }
+        }
+
         // 暂停按钮（奔跑中且未暂停时显示 ❚❚）
         if (core.state === 'run' && !core.paused) {
             ui.fillColor = new Color(255, 255, 255, 32);

@@ -51,6 +51,30 @@ export interface CameraCfg {
     /** 跳跃高度跟随系数（0 关闭） */
     heightFollow: number;
 }
+export interface MapCfg {
+    /** 路径生成种子（同种子路径可复现） */
+    seed: number;
+    /** 预生成距离（玩家前方，逻辑单位） */
+    horizon: number;
+    /** 回收距离（玩家身后） */
+    recycleBehind: number;
+    straightMin: number;
+    straightMax: number;
+    turnRadius: number;
+    /** 转弯操作窗口（路口前开启距离） */
+    turnWindow: number;
+    turnGapMin: number;
+    turnGapMax: number;
+    slopeChance: number;
+    slopeMin: number;
+    slopeMax: number;
+    slopeGrade: number;
+    bridgeChance: number;
+    cliffChance: number;
+    caveChance: number;
+    specialGap: number;
+    themeEvery: number;
+}
 export interface SpawnCfg {
     rowInterval: number;
     singleRowChance: number;
@@ -85,6 +109,7 @@ export interface GameConfig {
     player: PlayerCfg;
     input: InputCfg;
     camera: CameraCfg;
+    map: MapCfg;
     spawn: SpawnCfg;
     obstacle: ObstacleCfg;
     death: DeathCfg;
@@ -105,6 +130,14 @@ export const DEFAULT_CONFIG: GameConfig = {
     },
     input: { swipeMin: 18, tapMax: 8 },
     camera: { fovBase: 58, fovGain: 10, followLerp: 8, heightFollow: 0.18 },
+    map: {
+        seed: 12345, horizon: 300, recycleBehind: 30,
+        straightMin: 18, straightMax: 40,
+        turnRadius: 6, turnWindow: 8, turnGapMin: 70, turnGapMax: 180,
+        slopeChance: 0.18, slopeMin: 16, slopeMax: 30, slopeGrade: 0.12,
+        bridgeChance: 0.08, cliffChance: 0.06, caveChance: 0.06, specialGap: 120,
+        themeEvery: 400,
+    },
     spawn: {
         rowInterval: 8, singleRowChance: 0.45, propInterval: 2.4,
         fragmentChance: 0.6, fragmentCount: 5, fragmentGap: 1.5, fragmentLead: 1.6,
@@ -140,6 +173,16 @@ const NUM_SECTIONS: Record<string, Record<string, NumRule>> = {
     },
     input: { swipeMin: { min: 1 }, tapMax: { min: 0 } },
     camera: { fovBase: { min: 20, max: 120 }, fovGain: { min: 0, max: 60 }, followLerp: { min: 0.1 }, heightFollow: { min: 0, max: 1 } },
+    map: {
+        seed: { integer: true, min: 0 }, horizon: { min: 60 }, recycleBehind: { min: 5 },
+        straightMin: { min: 4 }, straightMax: { min: 4 },
+        turnRadius: { min: 3 }, turnWindow: { min: 2 },
+        turnGapMin: { min: 30 }, turnGapMax: { min: 30 },
+        slopeChance: { min: 0, max: 1 }, slopeMin: { min: 5 }, slopeMax: { min: 5 },
+        slopeGrade: { min: 0.01, max: 0.5 },
+        bridgeChance: { min: 0, max: 1 }, cliffChance: { min: 0, max: 1 }, caveChance: { min: 0, max: 1 },
+        specialGap: { min: 30 }, themeEvery: { min: 100 },
+    },
     spawn: {
         rowInterval: { min: 0.1 }, singleRowChance: { min: 0, max: 1 }, propInterval: { min: 0.1 },
         fragmentChance: { min: 0, max: 1 }, fragmentCount: { min: 1, integer: true },
@@ -165,7 +208,7 @@ export function validateConfig(raw: unknown): string[] {
     const hasOwn = (o: Record<string, unknown>, k: string) => Object.prototype.hasOwnProperty.call(o, k);
 
     // 顶层必填 section
-    for (const sec of ['renderMode', 'world', 'speed', 'player', 'input', 'camera', 'spawn', 'obstacle', 'death', 'milestone', 'ad', 'ui']) {
+    for (const sec of ['renderMode', 'world', 'speed', 'player', 'input', 'camera', 'map', 'spawn', 'obstacle', 'death', 'milestone', 'ad', 'ui']) {
         if (!hasOwn(obj, sec)) errs.push(`缺少字段 ${sec}`);
     }
     if (errs.length) return errs;
@@ -223,6 +266,10 @@ export function validateConfig(raw: unknown): string[] {
         if (c.obstacle.pickupZFrom >= c.obstacle.pickupZTo) errs.push('obstacle.pickupZFrom 必须小于 pickupZTo');
         if (c.world.despawnZ >= c.obstacle.hitZ) errs.push('world.despawnZ 必须小于 obstacle.hitZ');
         if (c.speed.base + c.speed.gainCap < c.speed.base) errs.push('speed 配置非法');
+        if (c.map.turnGapMin > c.map.turnGapMax) errs.push('map.turnGapMin 必须小于等于 turnGapMax');
+        if (c.map.straightMin > c.map.straightMax) errs.push('map.straightMin 必须小于等于 straightMax');
+        if (c.map.slopeMin > c.map.slopeMax) errs.push('map.slopeMin 必须小于等于 slopeMax');
+        if (c.map.horizon <= c.map.recycleBehind * 2) errs.push('map.horizon 必须显著大于 recycleBehind');
     }
     return errs;
 }

@@ -26,7 +26,8 @@ export interface Prop {
 
 export type CoreEventType = 'fragment' | 'milestone' | 'crash' | 'died'
     | 'obstacleSmashed' | 'obstaclePassed'
-    | 'jump' | 'land' | 'slideStart' | 'stumble';
+    | 'jump' | 'land' | 'slideStart' | 'stumble'
+    | 'turnOk' | 'turnMiss';
 
 export interface CoreEvent {
     type: CoreEventType;

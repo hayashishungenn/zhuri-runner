@@ -27,6 +27,7 @@ export class ProceduralKuafu implements CharacterAnimator {
     private state: CharAnimState = 'idle';
     private deadT = 0;          // 倒地插值计时
     private _lastHop = 0;
+    private yawDeg = 0;         // 世界航向（转弯后由输入驱动）
 
     constructor(
         private makeNode: (parent: Node, name: string, kind: 'box' | 'sphere' | 'cyl' | 'cone', rgb: [number, number, number]) => Node,
@@ -78,6 +79,7 @@ export class ProceduralKuafu implements CharacterAnimator {
         this._lastHop = input.jumpT >= 0 ? Math.sin(input.jumpT * Math.PI) * 1.42 : 0;
         const root = this.root3d;
         root.setPosition(root.position.x, this._lastHop, 0);
+        this.yawDeg = input.yawDeg;
 
         switch (this.state) {
         case 'idle': this.poseIdle(input); break;
@@ -95,7 +97,7 @@ export class ProceduralKuafu implements CharacterAnimator {
     private poseIdle(input: AnimInput) {
         const bob = Math.sin(input.gTime * 2) * 0.02;
         this.root3d.setScale(1, 1, 1);
-        this.root3d.setRotationFromEuler(bob * 60, 0, 0);
+        this.root3d.setRotationFromEuler(bob * 60, this.yawDeg, 0);
         this.setLimbs(0, 0.1);
         this.staff.setRotationFromEuler(0, 0, 28);
     }
@@ -103,7 +105,7 @@ export class ProceduralKuafu implements CharacterAnimator {
     private poseRun(input: AnimInput) {
         const swing = Math.sin(input.runPhase) * 0.6;
         this.root3d.setScale(1, 1, 1);
-        this.root3d.setRotationFromEuler(6, 0, 0);           // 轻微前倾
+        this.root3d.setRotationFromEuler(6, this.yawDeg, 0);           // 轻微前倾
         this.setLimbs(swing, 0);
         this.staff.setRotationFromEuler(0, 0, 28 + Math.sin(input.runPhase) * 3);
     }
@@ -112,7 +114,7 @@ export class ProceduralKuafu implements CharacterAnimator {
         // 起跳收腿：进度前半段收拢、后半段准备落地
         const tuck = input.jumpT >= 0 ? Math.sin(Math.min(input.jumpT, 1) * Math.PI) : 0;
         this.root3d.setScale(1, 1, 1);
-        this.root3d.setRotationFromEuler(-8 + tuck * 10, 0, 0);
+        this.root3d.setRotationFromEuler(-8 + tuck * 10, this.yawDeg, 0);
         this.legL.setRotationFromEuler((0.9 * tuck + 0.2) * DEG, 0, 0);
         this.legR.setRotationFromEuler((-0.5 * tuck) * DEG, 0, 0);
         this.armL.setRotationFromEuler((-1.4 * tuck - 0.3) * DEG, 0, 0);
@@ -122,7 +124,7 @@ export class ProceduralKuafu implements CharacterAnimator {
 
     private poseSlide(_input: AnimInput) {
         this.root3d.setScale(1, 0.62, 1);
-        this.root3d.setRotationFromEuler(-55, 0, 0);
+        this.root3d.setRotationFromEuler(-55, this.yawDeg, 0);
         this.setLimbs(0.2, 0.9);                              // 腿前伸、手臂后摆
         this.staff.setRotationFromEuler(0, 0, 10);
     }
@@ -131,7 +133,7 @@ export class ProceduralKuafu implements CharacterAnimator {
         // 踉跄：高频晃动 + 前倾加深 + 手臂乱摆
         const wobble = Math.sin(input.gTime * 18) * 0.12;
         this.root3d.setScale(1, 0.92, 1);
-        this.root3d.setRotationFromEuler(16 + wobble * DEG * 0.5, 0, wobble * DEG);
+        this.root3d.setRotationFromEuler(16 + wobble * DEG * 0.5, this.yawDeg, wobble * DEG);
         this.setLimbs(Math.sin(input.gTime * 20) * 0.9, -0.8);
         this.staff.setRotationFromEuler(0, 0, 28 + Math.sin(input.gTime * 20) * 8);
     }
@@ -141,7 +143,7 @@ export class ProceduralKuafu implements CharacterAnimator {
         this.deadT = Math.min(this.deadT + dt, 0.5);
         const k = this.deadT / 0.5;
         this.root3d.setScale(1, 1 - 0.25 * k, 1);
-        this.root3d.setRotationFromEuler(-70 * k, 0, 0);
+        this.root3d.setRotationFromEuler(-70 * k, this.yawDeg, 0);
         this.root3d.setPosition(this.root3d.position.x, this._lastHop * (1 - k), k * 0.5);
         this.setLimbs(-0.6 * (1 - k), 1.2 * k);
         this.staff.setRotationFromEuler(0, 0, 28 + 40 * k);

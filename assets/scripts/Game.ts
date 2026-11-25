@@ -42,7 +42,8 @@ export class Game extends Component {
         }
         log.info('配置加载成功 renderMode=' + cfg.renderMode);
         this.cfg = cfg;
-        this.core = new GameCore(cfg);
+        // 90° 转弯仅在 3D 渲染模式启用（2D 回退保持直线跑道，转弯窗口不出现）
+        this.core = new GameCore(cfg, undefined, { turnsEnabled: cfg.renderMode === '3d' });
         this.ad = newAdService(cfg);
         // 2D 渲染器需先于 Hud2D 创建节点，保证 UI 绘制在世界之上
         if (cfg.renderMode === '2d') this.renderer = new Renderer2D(this.node, cfg);

@@ -25,6 +25,8 @@ export interface AnimInput {
     stumbleT: number;
     /** 全局时钟（用于踉跄晃动/待机呼吸等相位） */
     gTime: number;
+    /** 航向角（度，Phase 2 转弯后角色世界朝向） */
+    yawDeg: number;
 }
 
 export interface CharacterAnimator {

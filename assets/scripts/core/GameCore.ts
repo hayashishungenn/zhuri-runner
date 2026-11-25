@@ -8,6 +8,7 @@
 import { GameConfig } from '../config/GameConfigSchema';
 import { SystemRng, Rng } from './rng';
 import { Obstacle, ObstacleType, Fragment, Prop, GameState, CoreEvent } from './types';
+import { MapGenerator, Corner } from './MapGenerator';
 
 export class GameCore {
     readonly cfg: GameConfig;
@@ -42,12 +43,26 @@ export class GameCore {
     private slowFactor = 1;     // 减速倍率（踉跄等触发）
     private slowTimer = 0;
 
-    constructor(cfg: GameConfig, rng?: Rng) {
+    // ---- Phase 2：无限地图与转弯 ----
+    readonly mapGen: MapGenerator;
+    /** 世界空间路径（渲染层采样用；玩家 dist 即其在路径上的位置） */
+    get path() { return this.mapGen.path; }
+    /** 转弯操作窗口（null = 无窗口）；d 为路口判定点绝对距离 */
+    turnWindow: { dir: 1 | -1; d: number } | null = null;
+    cornersPassed = 0;
+
+    constructor(cfg: GameConfig, rng?: Rng, opts?: { turnsEnabled?: boolean }) {
         this.cfg = cfg;
         this.rng = rng ?? new SystemRng();
         this.speed = cfg.speed.base;
         this.milestone = cfg.milestone.step;
         this.spawnAcc = cfg.spawn.rowInterval * 0.5;   // P0 初值 4 = 半个生成间隔
+        // 地图生成：默认关闭转弯（旧测试语义不变）；3D 渲染模式由 Game 开启
+        this.mapGen = new MapGenerator({
+            ...cfg.map,
+            turnsEnabled: opts?.turnsEnabled ?? false,
+        });
+        this.mapGen.update(0);
     }
 
     get laneMax(): number { return Math.floor(this.cfg.world.laneCount / 2); }
@@ -96,6 +111,31 @@ export class GameCore {
         this.slowTimer = Math.max(this.slowTimer, duration);
     }
 
+    /**
+     * 路口转向（Phase 2）。仅在转弯窗口内有效：
+     * 方向正确 → 通过路口；方向错误 → 立即撞墙死亡。
+     * @returns 是否成功转向
+     */
+    tryTurn(dir: 1 | -1): boolean {
+        if (this.state !== 'run' || this.paused || !this.turnWindow) return false;
+        const c = this.findCorner(this.turnWindow.d);
+        if (dir === this.turnWindow.dir) {
+            if (c) c.passed = true;
+            this.cornersPassed++;
+            this.events.push({ type: 'turnOk' });
+            this.turnWindow = null;
+            return true;
+        }
+        // 转错方向：冲出跑道
+        this.events.push({ type: 'turnMiss' });
+        this.crash();
+        return false;
+    }
+
+    private findCorner(d: number): Corner | undefined {
+        return this.mapGen.corners.find((c) => Math.abs(c.d - d) < 0.5);
+    }
+
     /** 死亡结算后的复活（广告发奖回调触发） */
     revive() {
         this.reviveUsed = true;
@@ -121,6 +161,11 @@ export class GameCore {
         this.paused = false;
         this.stumbleTimer = 0;
         this.slowFactor = 1; this.slowTimer = 0;
+        // 无限地图：同种子重建（可复现）
+        this.mapGen.reset();
+        this.mapGen.update(0);
+        this.turnWindow = null;
+        this.cornersPassed = 0;
     }
 
     // ---------- 输入意图 ----------
@@ -175,6 +220,9 @@ export class GameCore {
         const c = this.cfg;
         this.speed = c.speed.base + Math.min(this.dist * c.speed.gain, c.speed.gainCap);
         const spd = this.effectiveSpeed;
+        // 无限地图：前方预生成 / 身后回收；转弯窗口状态更新
+        this.mapGen.update(this.dist);
+        this.updateTurnWindow();
         // 踉跄/减速计时
         if (this.stumbleTimer > 0) this.stumbleTimer = Math.max(0, this.stumbleTimer - dt);
         if (this.slowTimer > 0) {
@@ -251,6 +299,26 @@ export class GameCore {
         }
     }
 
+    /** 转弯窗口状态机：进入窗口开启；越过路口未转向 → 撞墙（转弯失败） */
+    private updateTurnWindow() {
+        const next = this.mapGen.corners.find((c) => !c.passed);
+        const W = this.cfg.map.turnWindow;
+        if (this.turnWindow) {
+            const passed = this.findCorner(this.turnWindow.d)?.passed;
+            if (passed) { this.turnWindow = null; return; }
+            if (this.dist > this.turnWindow.d + 0.6) {
+                // 错过转弯：撞上路口墙体（无敌不豁免——墙是跑道本体）
+                this.events.push({ type: 'turnMiss' });
+                this.turnWindow = null;
+                this.crash();
+            }
+            return;
+        }
+        if (next && this.dist >= next.d - W && this.dist <= next.d + 0.6) {
+            this.turnWindow = { dir: next.dir, d: next.d };
+        }
+    }
+
     private updateDying(dt: number) {
         const c = this.cfg.death;
         this.timeScale += (1 - this.timeScale) * Math.min(1, dt * c.slowmoRecover / Math.max(this.timeScale, 0.2));
@@ -271,6 +339,10 @@ export class GameCore {
     // ---------- 生成 ----------
     private spawnRow() {
         const c = this.cfg;
+        // 生成避让：碎片带延伸至 spawnZ+lead+count*gap，整带需落在允许生成的直线段
+        const front = this.dist + c.world.spawnZ;
+        const back = front + c.spawn.fragmentLead + c.spawn.fragmentCount * c.spawn.fragmentGap;
+        if (!this.mapGen.path.isSafeSpawnZone(front, 6) || !this.mapGen.path.isSafeSpawnZone(back, 2)) return;
         const lanesFree: number[] = [];
         for (let l = -this.laneMax; l <= this.laneMax; l++) lanesFree.push(l);
         const types: ObstacleType[] = ['rock', 'log', 'wall'];
@@ -299,6 +371,7 @@ export class GameCore {
 
     private spawnProp() {
         const c = this.cfg.spawn;
+        if (!this.mapGen.path.isSafeSpawnZone(this.dist + this.cfg.world.spawnZ, 6)) return;
         const side = this.rng.next() < 0.5 ? -1 : 1;
         this.props.push({
             x: side * (c.propSideMin + this.rng.next() * c.propSideSpread),

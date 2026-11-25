@@ -96,5 +96,25 @@
     "stumbleText": "踉跄！",
     "pausedTitle": "暂 停",
     "resumeBtn": "继续奔跑"
+  },
+  "map": {
+    "seed": 12345,
+    "horizon": 300,
+    "recycleBehind": 30,
+    "straightMin": 18,
+    "straightMax": 40,
+    "turnRadius": 6,
+    "turnWindow": 8,
+    "turnGapMin": 70,
+    "turnGapMax": 180,
+    "slopeChance": 0.18,
+    "slopeMin": 16,
+    "slopeMax": 30,
+    "slopeGrade": 0.12,
+    "bridgeChance": 0.08,
+    "cliffChance": 0.06,
+    "caveChance": 0.06,
+    "specialGap": 120,
+    "themeEvery": 400
   }
 }

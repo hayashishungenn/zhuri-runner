@@ -1,14 +1,25 @@
 import { describe, it, expect } from 'vitest';
 import { GameCore } from '../assets/scripts/core/GameCore';
 import { SeededRng } from '../assets/scripts/core/rng';
-import { StraightPath } from '../assets/scripts/core/track';
+import { SegmentPath } from '../assets/scripts/core/track';
+import { TrackSegment } from '../assets/scripts/core/track';
 import { DEFAULT_CONFIG as CFG } from '../assets/scripts/config/GameConfigSchema';
 import { validateConfig } from '../assets/scripts/config/GameConfigSchema';
 
 const DT = 0.016;
 
-function makeCore(seed = 42): GameCore {
-    return new GameCore(CFG, new SeededRng(seed));
+/** 纯直线配置（禁转弯与特殊地块）—— 帧率一致性/池化压测的受控环境 */
+const CFG_STRAIGHT = (() => {
+    const c = JSON.parse(JSON.stringify(CFG));
+    c.map.specialGap = 1e9;
+    return c;
+})();
+
+function makeCore(seed = 42, turnsEnabled = false): GameCore {
+    return new GameCore(CFG, new SeededRng(seed), { turnsEnabled });
+}
+function makeStraightCore(seed = 42): GameCore {
+    return new GameCore(CFG_STRAIGHT, new SeededRng(seed));
 }
 function step(core: GameCore, n: number, dt = DT) {
     for (let i = 0; i < n; i++) core.update(dt);
@@ -117,7 +128,7 @@ describe('帧率一致性（运动与帧率解耦验证）', () => {
     const INPUT_TIMES = [1, 2.5, 3, 5.5, 8, 11, 14.5, 20, 25.5, 30, 33, 40, 47, 52, 58];
     /** 固定输入脚本：在确定的"游戏时间点"施加输入，与帧率无关；按精确帧数运行（总时长严格相等） */
     function runScenario(dt: number) {
-        const c = makeCore(7);
+        const c = makeStraightCore(7);
         c.startRun();
         c.invincible = 1e9;                // 排除碰撞死亡对比较的干扰
         const frames = Math.round(60 / dt); // 严格 60s
@@ -160,7 +171,7 @@ describe('帧率一致性（运动与帧率解耦验证）', () => {
         // RNG 消耗交错顺序翻转 → 后续碎片车道抽取分叉（离散事件固有，非运动差异）。
         // 因此：运动一致性用严格阈值断言；事件计数仅约束在合理带宽内。
         function noLane(dt: number) {
-            const c = makeCore(11);
+            const c = makeStraightCore(11);
             c.startRun();
             c.invincible = 1e9;
             const frames = Math.round(60 / dt);
@@ -215,7 +226,7 @@ describe('帧率一致性（运动与帧率解耦验证）', () => {
 
 describe('10 分钟连续运行压测（任务书测试要求）', () => {
     it('600s 随机输入模拟：状态合法、实体数量有界、时间精确推进', () => {
-        const c = makeCore(2024);
+        const c = makeStraightCore(2024);
         c.startRun();
         const rng = new SeededRng(99);
         const dt = 1 / 60;
@@ -255,25 +266,41 @@ describe('10 分钟连续运行压测（任务书测试要求）', () => {
     });
 });
 
-describe('TrackPath（前进方向动态变化预留）', () => {
-    it('StraightPath：车道偏移与 z 映射正确，heading 恒 0', () => {
-        const p = new StraightPath(1.7, 0.55);
+describe('TrackPath（Phase 1 直线语义在 SegmentPath 下的等价性）', () => {
+    /** 60 逻辑单位长的直线段（grade 0） */
+    function straightPath(): SegmentPath {
+        const p = new SegmentPath();
+        const seg: TrackSegment = {
+            kind: 'straight', startD: 0, length: 60,
+            entry: { x: 0, y: 0, z: 0 }, entryHeading: 0,
+            exit: { x: 0, y: 0, z: -60 }, exitHeading: 0,
+            halfWidth: 2.94, grade: 0, radius: 0, turn: 0, theme: 0,
+            allowsObstacles: true, allowsProps: true,
+            boundaryLeft: 'open', boundaryRight: 'open',
+        };
+        p.append(seg);
+        return p;
+    }
+    it('直线：heading 恒 0，z 随距离沿 -Z 推进', () => {
+        const p = straightPath();
         const s0 = p.sample(0, 0);
-        expect(s0.x).toBe(0); expect(s0.z).toBe(-0); expect(s0.heading).toBe(0);
-        const s1 = p.sample(46, -1);
-        expect(s1.x).toBeCloseTo(-1.7, 6);
-        expect(s1.z).toBeCloseTo(-46 * 0.55, 6);
-        expect(p.headingAt(100)).toBe(0);
+        expect(s0.x).toBe(0); expect(s0.z).toBe(0); expect(s0.heading).toBe(0);
+        const s1 = p.sample(46, 0);
+        expect(s1.z).toBeCloseTo(-46, 5);
+        const s2 = p.sample(46, -1.7);
+        expect(s2.x).toBeCloseTo(-1.7, 5);
     });
 
-    it('sample 对 forward 单调（z 随距离递减）', () => {
-        const p = new StraightPath(1.7, 0.55);
+    it('sample 对距离单调（z 递减），trim 后仍可采样', () => {
+        const p = straightPath();
         let prev = Infinity;
         for (let d = 0; d <= 50; d += 5) {
             const z = p.sample(d, 0).z;
             expect(z).toBeLessThan(prev);
             prev = z;
         }
+        p.trim(30);
+        expect(p.sample(40, 0).z).toBeCloseTo(-40, 5);
     });
 });
 
