@@ -10,7 +10,7 @@
 |-----------|------|------|------|
 | Core | `core/`（GameCore 状态机、rng 可播种随机、types、Logger） | ✅ | 规则唯一真源；零 cc 依赖可单测 |
 | Runner | `core/GameCore.ts` 速度/跳跃/俯冲/变道/踉跄减速/暂停 | ✅ | P2 若复杂化（道具/转弯）再拆 `runner/` |
-| World | `core/track.ts`（TrackPath 路径抽象 + StraightPath）+ 实体数组 + `Renderer3D.build*` | ✅（直线跑道） | 🅿️ 90° 转弯时实现 ArcPath 接入同一接口（核心层零改动） |
+| World | `core/track.ts`（SegmentPath 分段路径：直/弧/坡/桥/崖/洞）+ `core/MapGenerator.ts`（种子化带权重生成）+ `core/WorldShift.ts`（原点重定位） | ✅（90° 转弯/坡度/主题/特殊地块） | 核心玩法层保持相对坐标，与跑道形状解耦 |
 | Input | `input/InputController.ts`（多点触控按 ID 隔离 / TOUCH_CANCEL / 阈值配置化） | ✅ | 意图归一化，不含玩法 |
 | Camera | `render/Renderer3D.updateCamera`（跟随插值/跳跃高度跟随/速度 fov/震屏上限/穿模防护） | ✅ | 🅿️ 首人称/过场再抽 `camera/` |
 | Collision | `core/GameCore.updateRun` 判定（车道匹配 + 跳/冲窗口 + hitZ） | ✅ | 运动学判定；物理方案参考 REFERENCE_PROJECTS |
@@ -41,7 +41,9 @@ assets/scripts/
 ├── core/                   # ★ 零 cc 依赖，可在 Node 中单测
 │   ├── types.ts            # 实体/状态/意图/事件类型
 │   ├── rng.ts              # 可播种随机源接口（SystemRng / SeededRng）
-│   ├── track.ts            # TrackPath 路径抽象（StraightPath；P2 转弯接入点）
+│   ├── track.ts            # SegmentPath 分段路径（出入口连续性断言/采样/安全区）
+│   ├── MapGenerator.ts     # 无限地图生成（种子化/权重/转弯间隔/主题/预生成回收）
+│   ├── WorldShift.ts       # 世界原点重定位（长距离 float32 精度防护，纯数学可测）
 │   ├── Logger.ts           # 分级日志（core 不写日志，供外层使用）
 │   └── GameCore.ts         # 状态机 + 玩法机制（含踉跄减速/暂停/动作优先级）
 ├── input/
@@ -54,7 +56,7 @@ assets/scripts/
 │   ├── ProceduralKuafu.ts  # 几何体程序化夸父（CharacterAnimator 实现，原创零授权风险）
 │   ├── Hud2D.ts            # 2D UI 层（HUD/暂停面板/红闪/暗角），双渲染器共用
 │   ├── Renderer2D.ts       # Graphics 伪3D（P0 视觉，回退用）
-│   ├── Renderer3D.ts       # 真3D：相机(fov/跟随/震屏) + 平行光 + 运行时场景（默认）
+│   ├── Renderer3D.ts       # 真3D：path 化相机/分段 ribbon 跑道/天空锚点/重定位应用（默认）
 │   ├── ScreenFx.ts         # 震屏/红闪/慢动作（事件驱动，衰减曲线）
 │   └── layout.ts           # 逻辑坐标↔UI 坐标唯一换算源
 └── platform/
