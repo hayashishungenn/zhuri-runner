@@ -7,7 +7,7 @@
  * - 程序化夸父剪影（躯干/四肢/发髻/桃木杖，跑动周期动画）
  * 只读核心状态；实体节点按需创建/回收（池化），透明材质不用于 3D 层（见 KNOWN_ISSUES）。
  */
-import { Node, Camera, MeshRenderer, Material, Mesh, Color, Vec3, Layers, director, utils, primitives } from 'cc';
+import { Node, Camera, MeshRenderer, Material, Mesh, Color, Vec3, Layers, director, utils, primitives, DirectionalLight } from 'cc';
 import { GameConfig } from '../config/GameConfigSchema';
 import { GameCore } from '../core/GameCore';
 import { AdService } from '../platform/AdService';
@@ -18,7 +18,6 @@ import { Obstacle, Fragment, Prop } from '../core/types';
 
 // ---------- 世界尺度（逻辑单位 → 3D 世界单位） ----------
 const LANE_W3 = 1.7;        // 一车道宽度
-const PX3 = LANE_W3 / 110;  // 逻辑像素 → 世界单位（P0 车道距 110px）
 const Z_SCALE = 0.55;       // 逻辑 z → 世界 z（远离玩家为负）
 const HOP_U = 1.42;         // 跳跃高度（对应 P0 92px）
 
@@ -128,6 +127,15 @@ export class Renderer3D implements IRenderer {
         this.cam.clearColor = new Color(255, 154, 60, 255);
         this.camNode.setPosition(0, 4.1, 7.4);
         this.camNode.lookAt(new Vec3(0, 1.1, -3));
+
+        // 平行光：当前材质全部 builtin-unlit（不参与光照），此光源为
+        // P2 引入 builtin-standard 材质（真实明暗/阴影）预留，满足最小场景清单
+        const lightNode = new Node('sunLight');
+        lightNode.layer = Layers.Enum.DEFAULT;
+        this.root3d.addChild(lightNode);
+        const dirLight = lightNode.addComponent(DirectionalLight);
+        dirLight.illuminance = 2.2;
+        lightNode.setRotationFromEuler(-42, 118, 0);   // 源自画面左侧低角度落日方向
 
         this.buildSky();
         this.buildTrack();
@@ -253,65 +261,65 @@ export class Renderer3D implements IRenderer {
     private createEntityNode(kind: string): Node {
         // 约定：容器节点锚点在地面（y=0），几何体作为子节点摆放
         switch (kind) {
-            case 'rock': {
-                const n = new Node('rock');
-                n.layer = Layers.Enum.DEFAULT;
-                n.setParent(this.root3d);
-                const body = this.node3d(n, 'body', this.mBox, [58, 36, 20]);
-                body.setPosition(0, 0.35, 0); body.setScale(1.2, 0.7, 0.9);
-                const cap = this.node3d(n, 'cap', this.mCone, [80, 50, 30]);
-                cap.setPosition(0, 0.9, 0); cap.setScale(0.7, 0.5, 0.55);
-                return n;
+        case 'rock': {
+            const n = new Node('rock');
+            n.layer = Layers.Enum.DEFAULT;
+            n.setParent(this.root3d);
+            const body = this.node3d(n, 'body', this.mBox, [58, 36, 20]);
+            body.setPosition(0, 0.35, 0); body.setScale(1.2, 0.7, 0.9);
+            const cap = this.node3d(n, 'cap', this.mCone, [80, 50, 30]);
+            cap.setPosition(0, 0.9, 0); cap.setScale(0.7, 0.5, 0.55);
+            return n;
+        }
+        case 'log': {
+            const n = new Node('log');
+            n.layer = Layers.Enum.DEFAULT;
+            n.setParent(this.root3d);
+            for (const s of [-1, 1]) {
+                const post = this.node3d(n, 'post', this.mBox, [44, 24, 13]);
+                post.setPosition(s * 0.72, 0.35, 0); post.setScale(0.14, 0.7, 0.14);
             }
-            case 'log': {
-                const n = new Node('log');
-                n.layer = Layers.Enum.DEFAULT;
-                n.setParent(this.root3d);
-                for (const s of [-1, 1]) {
-                    const post = this.node3d(n, 'post', this.mBox, [44, 24, 13]);
-                    post.setPosition(s * 0.72, 0.35, 0); post.setScale(0.14, 0.7, 0.14);
-                }
-                const bar = this.node3d(n, 'bar', this.mBox, [64, 34, 15]);
-                bar.setPosition(0, 0.78, 0); bar.setScale(1.6, 0.16, 0.2);
-                const glow = this.node3d(n, 'glow', this.mBox, [255, 209, 102]);
-                glow.setPosition(0, 0.96, 0); glow.setScale(1.5, 0.03, 0.12);
-                return n;
-            }
-            case 'wall': {
-                const n = new Node('wall');
-                n.layer = Layers.Enum.DEFAULT;
-                n.setParent(this.root3d);
-                const body = this.node3d(n, 'body', this.mBox, [51, 29, 16]);
-                body.setPosition(0, 0.9, 0); body.setScale(1.6, 1.8, 0.5);
-                return n;
-            }
-            case 'frag': {
-                const n = new Node('frag');
-                n.layer = Layers.Enum.DEFAULT;
-                n.setParent(this.root3d);
-                const orb = this.node3d(n, 'orb', this.mSphere, [255, 209, 102]);
-                orb.setScale(0.32, 0.32, 0.32);
-                return n;
-            }
-            case 'tree': {
-                const n = new Node('tree');
-                n.layer = Layers.Enum.DEFAULT;
-                n.setParent(this.root3d);
-                const trunk = this.node3d(n, 'trunk', this.mCyl, [29, 14, 8]);
-                trunk.setPosition(0, 0.35, 0); trunk.setScale(0.22, 0.7, 0.22);
-                const crown = this.node3d(n, 'crown', this.mCone, [29, 14, 8]);
-                crown.setPosition(0, 1.25, 0); crown.setScale(1.6, 1.9, 1.6);
-                return n;
-            }
-            case 'prock': {
-                const n = new Node('prock');
-                n.layer = Layers.Enum.DEFAULT;
-                n.setParent(this.root3d);
-                const body = this.node3d(n, 'body', this.mBox, [40, 24, 14]);
-                body.setPosition(0, 0.4, 0); body.setScale(0.8, 0.8, 0.8);
-                return n;
-            }
-            default: throw new Error('未知实体类型: ' + kind);
+            const bar = this.node3d(n, 'bar', this.mBox, [64, 34, 15]);
+            bar.setPosition(0, 0.78, 0); bar.setScale(1.6, 0.16, 0.2);
+            const glow = this.node3d(n, 'glow', this.mBox, [255, 209, 102]);
+            glow.setPosition(0, 0.96, 0); glow.setScale(1.5, 0.03, 0.12);
+            return n;
+        }
+        case 'wall': {
+            const n = new Node('wall');
+            n.layer = Layers.Enum.DEFAULT;
+            n.setParent(this.root3d);
+            const body = this.node3d(n, 'body', this.mBox, [51, 29, 16]);
+            body.setPosition(0, 0.9, 0); body.setScale(1.6, 1.8, 0.5);
+            return n;
+        }
+        case 'frag': {
+            const n = new Node('frag');
+            n.layer = Layers.Enum.DEFAULT;
+            n.setParent(this.root3d);
+            const orb = this.node3d(n, 'orb', this.mSphere, [255, 209, 102]);
+            orb.setScale(0.32, 0.32, 0.32);
+            return n;
+        }
+        case 'tree': {
+            const n = new Node('tree');
+            n.layer = Layers.Enum.DEFAULT;
+            n.setParent(this.root3d);
+            const trunk = this.node3d(n, 'trunk', this.mCyl, [29, 14, 8]);
+            trunk.setPosition(0, 0.35, 0); trunk.setScale(0.22, 0.7, 0.22);
+            const crown = this.node3d(n, 'crown', this.mCone, [29, 14, 8]);
+            crown.setPosition(0, 1.25, 0); crown.setScale(1.6, 1.9, 1.6);
+            return n;
+        }
+        case 'prock': {
+            const n = new Node('prock');
+            n.layer = Layers.Enum.DEFAULT;
+            n.setParent(this.root3d);
+            const body = this.node3d(n, 'body', this.mBox, [40, 24, 14]);
+            body.setPosition(0, 0.4, 0); body.setScale(0.8, 0.8, 0.8);
+            return n;
+        }
+        default: throw new Error('未知实体类型: ' + kind);
         }
     }
 

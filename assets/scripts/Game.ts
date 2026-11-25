@@ -7,6 +7,7 @@ import { _decorator, Component, Color, error } from 'cc';
 import { loadGameConfig } from './config/GameConfig';
 import { formatUi, GameConfig } from './config/GameConfigSchema';
 import { GameCore } from './core/GameCore';
+import { Logger } from './core/Logger';
 import { Intent } from './core/types';
 import { InputController, InputDelegate } from './input/InputController';
 import { Hud2D, HudButton } from './render/Hud2D';
@@ -14,9 +15,11 @@ import { IRenderer } from './render/IRenderer';
 import { Renderer2D } from './render/Renderer2D';
 import { Renderer3D } from './render/Renderer3D';
 import { AdService, newAdService } from './platform/AdService';
+import { installGlobalErrorHooks } from './platform/ErrorHooks';
 import { LOGICAL_W, PLAYER_Y } from './render/layout';
 
 const { ccclass } = _decorator;
+const log = new Logger('Game');
 
 @ccclass('Game')
 export class Game extends Component {
@@ -28,13 +31,16 @@ export class Game extends Component {
     private ad: AdService | null = null;
 
     async start() {
+        installGlobalErrorHooks();
         let cfg: GameConfig;
         try {
             cfg = await loadGameConfig();     // 非法配置在此抛错（不静默回退）
         } catch (e) {
             error('[Game] 配置加载失败，游戏无法启动: ' + String(e));
+            log.error('配置加载失败，游戏无法启动', String(e));
             throw e;
         }
+        log.info('配置加载成功 renderMode=' + cfg.renderMode);
         this.cfg = cfg;
         this.core = new GameCore(cfg);
         this.ad = newAdService(cfg);
@@ -44,6 +50,7 @@ export class Game extends Component {
         if (cfg.renderMode === '3d') this.renderer = new Renderer3D(cfg);
         this.inputCtl = new InputController(this.makeDelegate());
         this.inputCtl.attach();
+        log.info('装配完成');
     }
 
     update(dtRaw: number) {
@@ -78,10 +85,10 @@ export class Game extends Component {
                 if (!this.core || this.ad?.active) return;   // 广告展示期吞掉手势（与 P0 一致）
                 this.hud?.markFirstInput();
                 switch (intent) {
-                    case Intent.LaneLeft: this.core.doLane(-1); break;
-                    case Intent.LaneRight: this.core.doLane(1); break;
-                    case Intent.Jump: this.core.doJump(); break;
-                    case Intent.Slide: this.core.doSlide(); break;
+                case Intent.LaneLeft: this.core.doLane(-1); break;
+                case Intent.LaneRight: this.core.doLane(1); break;
+                case Intent.Jump: this.core.doJump(); break;
+                case Intent.Slide: this.core.doSlide(); break;
                 }
             },
             onTap: (gx: number, gy: number) => {
@@ -103,17 +110,17 @@ export class Game extends Component {
     private onButton(btn: HudButton) {
         const core = this.core!;
         switch (btn) {
-            case 'mute':
+        case 'mute':
                 this.hud!.toggleMute();
-                break;
-            case 'start':
-            case 'restart':
-                core.startRun();
-                break;
-            case 'revive':
+            break;
+        case 'start':
+        case 'restart':
+            core.startRun();
+            break;
+        case 'revive':
                 // 真机由 WxAdService 拉起 wx.createRewardedVideoAd（P4 接真实 adUnitId）
                 this.ad!.show(() => core.revive());
-                break;
+            break;
         }
     }
 
