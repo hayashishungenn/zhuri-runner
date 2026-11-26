@@ -201,12 +201,12 @@ export class Hud2D {
         tk.lbl.string = '跳过教程 ›';
         tk.node.setPosition(LX(360), LY(140), 0);
         tk.node.active = false;
-        // 页面容器：标题 + 8 行文本
+        // 页面容器：标题 + 12 行文本（成就页 9 行、商店 9 行，原 8 行会越界崩溃）
         const pg = this.makeLabel(parent, 'pTitle', 36, lc);
         this.lblPage = pg.lbl;
         pg.node.setPosition(0, LY(220), 0);
         pg.node.active = false;
-        for (let i = 0; i < 8; i++) {
+        for (let i = 0; i < 12; i++) {
             const row = this.makeLabel(parent, `pRow${i}`, 20, i % 2 === 0 ? C_PANEL_TXT() : C_BTN2());
             row.node.setPosition(0, LY(300 + i * 44), 0);
             row.node.active = false;

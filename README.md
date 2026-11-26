@@ -14,7 +14,7 @@ assets/scripts/
 └── platform/          # AdService（mock / wx 激励视频）
 ```
 
-测试：`npm test`（vitest，268 项）；类型检查：`npm run type-check`；代码规范：`npm run lint`。
+测试：`npm test`（vitest，269 项）；类型检查：`npm run type-check`；代码规范：`npm run lint`。
 
 ## 首次打开
 1. 打开 `/Applications/CocosCreator/CocosCreator.app`
@@ -40,4 +40,4 @@ bash scripts/build-wechat.sh     # Creator CLI → build/wechatgame
 默认**静音**（`Save` 默认值，随存档持久化）；右上角喇叭按钮可开/关，重启后保持上次状态。正式发布前如需默认开声，把 `defaultSaveData().settings.muted` 改回 `false`。
 
 ## 文档
-`docs/`：ROADMAP / GAME_DESIGN / ARCHITECTURE / PROGRESS / TEST_REPORT / PHASE8_REPORT / PHASE8_3_REPORT / ASSET_LICENSES / KNOWN_ISSUES / RELEASE_CHECKLIST
+`docs/`：ROADMAP / GAME_DESIGN / ARCHITECTURE / PROGRESS / TEST_REPORT / PHASE8_REPORT / PHASE8_3_REPORT / PHASE8_3_FINAL_REPORT / ASSET_LICENSES / KNOWN_ISSUES / RELEASE_CHECKLIST

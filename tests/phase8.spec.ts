@@ -19,7 +19,7 @@ import { BrowserPlatform } from '../assets/scripts/platform/BrowserPlatform';
 import { WxPlatform } from '../assets/scripts/platform/WxPlatform';
 import { createPlatform, detectWechat } from '../assets/scripts/platform/PlatformFactory';
 import { MockRewardedAdapter, MockInterstitialAdapter } from '../assets/scripts/platform/mock/MockAdAdapter';
-import { mergeAdStats, defaultAdStats } from '../assets/scripts/core/AdStats';
+import { mergeAdStats, defaultAdStats, localDate } from '../assets/scripts/core/AdStats';
 import { ACHIEVEMENTS, Achievements } from '../assets/scripts/core/Achievements';
 
 const DT = 1 / 60;
@@ -267,7 +267,8 @@ describe('广告平台与频控（Phase 8）', () => {
         const saved = defaultAdStats();
         saved.interstitial.completedRuns = 3;
         saved.interstitial.shownToday = 2;
-        saved.interstitial.date = new Date().toISOString().slice(0, 10);
+        // 使用与 AdService 相同的本地日期口径；UTC 日期在跨时区/跨零点会误触发每日重置
+        saved.interstitial.date = localDate();
         const a = new AdService(new BrowserPlatform(), AD_CFG, saved, undefined, new MockInterstitialAdapter());
         expect(a.completedRuns).toBe(3);
         expect(a.interstitialShownToday).toBe(2);

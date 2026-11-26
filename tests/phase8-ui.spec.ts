@@ -137,6 +137,13 @@ describe('HUD 命中与 UI 流程（Phase 8）', () => {
         expect(hud.pageTap(100, 300)).toBe(null);
     });
 
+    it('成就/商店等长页面（9–12 行）不越界，末行仍可点击', () => {
+        const { hud } = makeHud();
+        const rows = Array.from({ length: 12 }, (_, i) => ({ label: `行${i}`, action: `a:${i}` }));
+        expect(() => hud.openPage('achievements', '成就', rows)).not.toThrow();
+        expect(hud.pageTap(100, 300 + 11 * 44)).toBe('a:11');
+    });
+
     it('教程跳过命中仅在显示时有效', () => {
         const { hud } = makeHud();
         expect(hud.hitTutorialSkip(360, 140)).toBe(false);
