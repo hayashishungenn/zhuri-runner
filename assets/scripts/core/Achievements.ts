@@ -62,8 +62,8 @@ function achievedValue(stats: StatsSaveState, extra: { skins: number; upgradeLev
     case 'useShield': return stats.itemUses.shield ?? 0;
     case 'useWater': return stats.itemUses.water ?? 0;
     case 'useStaff': return stats.itemUses.staff ?? 0;
-    case 'themes': return stats.themeVisited.length;
-    case 'journeys': return stats.coolRuns >= 0 && stats.themeVisited.length >= 4 ? (stats.itemUses.journey ?? 0) : 0;
+    case 'themes': return new Set(stats.themeVisited.map((t) => ((Math.floor(t) % 4) + 4) % 4)).size;
+    case 'journeys': return stats.itemUses.journey ?? 0;
     case 'goldEarned': return stats.goldEarned;
     case 'coolRuns': return stats.coolRuns;
     case 'waterDrunk': return stats.waterDrunk;

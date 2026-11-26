@@ -25,6 +25,7 @@ import { LOGICAL_W, PLAYER_Y } from './render/layout';
 import { Economy } from './core/Economy';
 import { PlayerStats } from './core/PlayerStats';
 import { RunLedger } from './core/RunLedger';
+import { AdRewardCoordinator } from './core/AdRewardCoordinator';
 import { DailyQuests, QUEST_TEMPLATES } from './core/Quests';
 import { Achievements, ACHIEVEMENTS } from './core/Achievements';
 import { Upgrades, UpgradeKind, UPGRADE_DEFS, totalLevels } from './core/Upgrades';
@@ -57,6 +58,7 @@ export class Game extends Component {
     tutorial = new Tutorial(false);
     page: string | null = null;
     private ledger = new RunLedger();
+    private adRewards = new AdRewardCoordinator();
     private lastThemeIdx = 0;
     private sync = { totalLi: 0, totalFrags: 0, itemUses: {} as Record<string, number> };
     private tutorialRun = false;
@@ -94,11 +96,11 @@ export class Game extends Component {
         this.stats = new PlayerStats(this.save.data.stats);
         this.quests = new DailyQuests(this.save.data.quests, this.today());
         this.upgrades = new Upgrades(this.save.data.upgrades);
-        this.skinIdx = Math.max(0, this.save.data.skinsOwned.indexOf(this.save.data.skin));
-        if (this.save.data.skinsOwned.indexOf(this.save.data.skin) < 0) {
+        this.sync = { totalLi: 0, totalFrags: 0, itemUses: { ...this.stats.stats.itemUses } };
+        if (!this.save.data.skinsOwned.includes(this.save.data.skin)) {
             this.save.data.skin = 'kuafu';
-            this.skinIdx = 0;
         }
+        this.skinIdx = this.resolveCatalogSkinIdx(this.save.data.skin);
         this.audio = new AudioMgr(this.node);
         // 启动即恢复存档静音状态（此前从不恢复：上次静音本次照响）；默认静音见 Save 默认值
         this.audio.setMuted(this.save.data.settings.muted);
@@ -174,13 +176,24 @@ export class Game extends Component {
         if (this.tutorialRun && this.tutorial.done) {
             if (this.save && !this.save.data.tutorial.done) this.save.data.tutorial.done = true;
             this.tutorialRun = false;
-            this.ledger.endTutorial(this.core.cfg.spawn, this.core.cfg.map);
+            this.core.setRunOverrides(this.ledger.endTutorial());
             this.persist();
         }
         const themeIdx = this.core.themeIdx;
         if (themeIdx !== this.lastThemeIdx) {
-            if (themeIdx > this.lastThemeIdx) this.stats.visitTheme(themeIdx);
+            if (themeIdx > this.lastThemeIdx) {
+                this.stats.visitTheme(themeIdx);
+                if (themeIdx % 4 === 2) this.quests.addProgress('themeDesert', 1);
+            }
             this.lastThemeIdx = themeIdx;
+        }
+        // 任务事件喂数（障碍/转弯/清凉水花/征途通关）
+        for (const e of events) {
+            if (e.type === 'obstaclePassed') this.quests.addProgress('obstaclesPassed', 1);
+            else if (e.type === 'obstacleSmashed' || e.type === 'staffBreak') this.quests.addProgress('obstaclesSmashed', 1);
+            else if (e.type === 'turnOk') this.quests.addProgress('turns', 1);
+            else if (e.type === 'cool') this.quests.addProgress('coolEvents', 1);
+            else if (e.type === 'journeyDone') this.quests.addProgress('journeyDone', 1);
         }
         // 任务累计/峰值喂数（按累计值增量，dt 无关）
         this.quests.addProgress('totalLi', Math.max(0, Math.round(this.core.li) - this.sync.totalLi));
@@ -196,16 +209,18 @@ export class Game extends Component {
         }
         this.quests.setRunMetric('runLi', Math.round(this.core.li));
         this.quests.setRunMetric('runFrags', this.core.frags);
-        // 金币：实时增量发放，事务 id 由 RunLedger 保证跨局唯一
+        // 金币：实时累计差额发放，事务 id 由 RunLedger 保证跨局唯一
         const grant = this.ledger.fragmentGrant(this.core.frags, this.upgrades.goldMul());
         if (grant && grant.amount > 0) this.economy.grant(grant.txId, grant.amount);
-        // 结算：死亡/通关瞬间（每局一次）+ 最佳纪录 + 征途标记
+        // 结算：无尽与征途死亡/通关均落账 + 最佳纪录 + 征途标记
         for (const e of events) {
-            if (e.type === 'died' && this.core.mode === 'endless') {
-                const li = Math.floor(this.core.li);
-                if (this.save && li > this.save.data.bestLi) {
-                    this.save.data.bestLi = li;
-                    this.hud?.setBestLi(li);
+            if (e.type === 'died') {
+                if (this.core.mode === 'endless') {
+                    const li = Math.floor(this.core.li);
+                    if (this.save && li > this.save.data.bestLi) {
+                        this.save.data.bestLi = li;
+                        this.hud?.setBestLi(li);
+                    }
                 }
                 this.settleRun();
             }
@@ -292,6 +307,13 @@ export class Game extends Component {
         }
     }
 
+    /** 按皮肤 id 解析目录索引（统一使用完整皮肤目录索引，杜绝 skinsOwned 与 catalog 混用） */
+    private resolveCatalogSkinIdx(skinId: string): number {
+        if (!this.skins) return 0;
+        const idx = this.skins.skins.findIndex((x) => x.id === skinId);
+        return idx >= 0 ? idx : 0;
+    }
+
     /** 应用当前皮肤（3D 角色重建） */
     private applySkin() {
         if (!this.skins || !this.renderer?.applySkin) return;
@@ -299,27 +321,48 @@ export class Game extends Component {
         this.renderer.applySkin(skin);
     }
 
-    /** 换肤循环（标题页按钮）：写存档 + 3D 重建 + HUD 更新 */
+    /** 换肤循环（标题页按钮）：仅在玩家已拥有皮肤间切换，不越权解锁未购买皮肤 */
     private cycleSkin() {
         if (!this.skins || !this.save) return;
-        this.skinIdx = (this.skinIdx + 1) % this.skins.skins.length;
-        this.save.data.skin = this.skins.skins[this.skinIdx].id;
+        const owned = this.save.data.skinsOwned;
+        if (!owned.length) return;
+        const curPos = owned.indexOf(this.save.data.skin);
+        const nextId = owned[(curPos + 1 + owned.length) % owned.length];
+        this.save.data.skin = nextId;
+        this.skinIdx = this.resolveCatalogSkinIdx(nextId);
         this.persist();
         this.applySkin();
         this.hud?.setSkinIdx(this.skinIdx, this.skins.skins.map((x) => x.label));
         this.audio?.playSfx('ui');
     }
 
-    /** 单局结算：统计落账、插屏（仅自然结束节点）、存档落盘。金币已在拾取时逐笔发放，此处不重复 grant。 */
+    /** 单局结算：支持复活后增量落账、插屏仅首次结算触发、试用皮肤自动归还。 */
     private settleRun() {
         const core = this.core!;
-        if (!this.ledger.claimSettlement(this.ledger.currentSeed)) return;
-        const gold = Math.round(core.frags * this.upgrades.goldMul());
-        this.stats.onRunSettle(core.li, core.frags, gold, core.state, core.themeIdx, core.themeIdx);
-        this.ad?.stats.record('run_end', core.mode);
-        this.ad?.noteRunEnd();
-        // 插屏：仅在自然结算节点尝试（内部总开关/首局保护/冷却/频控）绝不打断奔跑
-        this.ad?.maybeShowInterstitial();
+        const delta = this.ledger.claimSettlement(this.ledger.currentSeed, core.li, core.frags);
+        if (!delta) return;
+        this.stats.onRunSettle(
+            delta.deltaLi,
+            delta.deltaFrags,
+            delta.deltaGold,
+            core.state,
+            core.themeIdx,
+            core.themeIdx,
+            core.isCoolRun,
+            core.li,
+        );
+        if (delta.isFirstSettle) {
+            this.ad?.stats.record('run_end', core.mode);
+            this.ad?.noteRunEnd();
+            this.ad?.maybeShowInterstitial();
+        }
+        // 试用皮肤单局结束后归还为已拥有皮肤
+        if (this.save && this.skins) {
+            const revertedId = this.adRewards.onRunEndSkin(this.save.data.skin);
+            this.skinIdx = this.resolveCatalogSkinIdx(revertedId);
+            this.applySkin();
+            this.hud?.setSkinIdx(this.skinIdx, this.skins.skins.map((x) => x.label));
+        }
         this.persist();
     }
 
@@ -332,74 +375,78 @@ export class Game extends Component {
         this.save.data.stats = this.stats.stats;
         this.save.data.upgrades = { ...this.upgrades.levels };
         if (this.ad) this.save.data.ads = this.ad.stats.data;
-        try { this.save.flush(); }
-        catch (e) { log.warn('存档写入失败（游戏继续运行）', String(e)); }
+        if (!this.save.flush()) {
+            log.warn('存档写入失败（游戏继续运行）', this.save.lastError ?? 'writeLocked');
+        }
     }
 
     /**
-     * 广告请求（5 场景）：死亡复活/结算翻倍/每日奖励翻倍/限时神通/皮肤试用。
-     * 仅 AdService 判定 isEnded=true 且事务未结算时才发奖；失败不阻断游戏。
+     * 广告请求（5 场景）：经 AdRewardCoordinator 绑定 runId 与请求快照，防重复翻倍/迟到回调串局/神通清零。
      */
     private requestAd(scene: AdScene): void {
         if (!this.ad || !this.save || !this.core) return;
-        if (scene === 'revive' && (!this.core.reviveUsable() || this.core.state !== 'dead')) return;
+        const ticket = this.adRewards.prepareTicket(scene, {
+            core: this.core,
+            ledger: this.ledger,
+            quests: this.quests,
+            allSkinIds: this.skins?.skins.map((s) => s.id) ?? ['kuafu'],
+            ownedSkins: this.save.data.skinsOwned,
+            currentSkinId: this.save.data.skin,
+        });
+        if (!ticket) {
+            this.hud?.showPop(LOGICAL_W / 2, 300, '当前无可领取奖励', false, new Color(255, 170, 90, 255));
+            return;
+        }
         const check = this.ad.canUse(scene);
         if (!check.ok) {
-            // 明确不可用（未开通流量主/未配置广告位）——不伪造成功，不阻断游戏
             this.hud?.showPop(LOGICAL_W / 2, 300, '广告暂不可用', false, new Color(255, 122, 106, 255));
             return;
         }
         void this.ad.requestReward(scene, () => {
-            // ★ 回调只在此处发放一次（AdService 事务已防重放）
+            const outcome = this.adRewards.applyReward(ticket, {
+                core: this.core!,
+                ledger: this.ledger,
+                economy: this.economy,
+                quests: this.quests,
+                questClaimedStore: this.save!.data.quests.claimed,
+            });
+            if (!outcome.applied) return;
             switch (scene) {
             case 'revive':
-                if (!this.core!.revive()) break;   // 异步回调到达时状态可能已变
-                    this.ad!.stats.record('revive', scene);
+                this.ad!.stats.record('revive', scene);
                 this.audio?.playSfx('revive');
                 break;
-            case 'doubleCoins': {
-                const bonus = Math.round(this.core!.frags * this.upgrades.goldMul());
-                this.economy.grant(`addouble:${Date.now()}`, bonus);
-                this.hud?.showPop(LOGICAL_W / 2, 300, `金币 ×2 +${bonus}`, true, new Color(255, 209, 102, 255));
+            case 'doubleCoins':
+                this.hud?.showPop(LOGICAL_W / 2, 300, `金币 ×2 +${outcome.bonus ?? 0}`, true, new Color(255, 209, 102, 255));
                 break;
-            }
-            case 'dailyDouble': {
-                // 今日最优任务的奖励翻倍（事务幂等）
-                const tpl = this.quests.todays().find((t) => this.quests.isComplete(t) && !this.quests.isClaimed(t));
-                if (tpl && this.quests.claim(tpl, this.save!.data.quests.claimed)) {
-                    this.economy.grant(`addaily:${this.quests.state.date}:${tpl.id}`, tpl.reward * 2);
-                    this.refreshPage();
-                }
+            case 'dailyDouble':
+                this.refreshPage();
                 break;
-            }
             case 'timedPower':
-                    // 下一局限时神通：磁吸+冲刺（不入存档，单次有效）
-                    this.core!.magnetT = Math.max(this.core!.magnetT, 12);
-                    this.core!.dashT = Math.max(this.core!.dashT, 3);
-                this.hud?.showPop(LOGICAL_W / 2, 300, '限时神通 · 获赠！', true, new Color(120, 200, 255, 255));
+                this.hud?.showPop(LOGICAL_W / 2, 300, '下局限时神通 · 已就绪！', true, new Color(120, 200, 255, 255));
                 break;
-            case 'skinTrial': {
-                // 指定皮肤试用：本局下一皮肤（不改存档拥有权）
-                const next = (this.skinIdx + 1) % (this.skins?.skins.length ?? 1);
-                this.skinIdx = next;
-                this.applySkin();
-                this.hud?.setSkinIdx(next, this.skins?.skins.map((x) => x.label) ?? []);
-                this.hud?.showPop(LOGICAL_W / 2, 300, '皮肤试用 · 已启用', true, new Color(255, 207, 125, 255));
+            case 'skinTrial':
+                if (outcome.trialSkinId && this.skins) {
+                    this.skinIdx = this.resolveCatalogSkinIdx(outcome.trialSkinId);
+                    this.applySkin();
+                    this.hud?.setSkinIdx(this.skinIdx, this.skins.skins.map((x) => x.label));
+                }
+                this.hud?.showPop(LOGICAL_W / 2, 300, '皮肤试用 · 本局生效', true, new Color(255, 207, 125, 255));
                 break;
-            }
             }
             this.persist();
         });
     }
 
-    /** 回到前台：平台音频恢复（不影响暂停状态，由玩家手动继续） */
+    /** 回到前台：重置固定步长累加器防追帧爆发 + 平台音频恢复（不自动取消暂停） */
     private onGameShow() {
+        this.core?.onBackgroundResume();
         this.ad?.onShow();
         const res = this.platform.resumeAudio();
         if (!res.supported) log.warn('音频恢复不可用: ' + (res.reason ?? ''));
     }
 
-    /** 新手教程启动：稀疏生成 + 顺序引导（可跳过；参数由 RunLedger 备份并在结束后还原） */
+    /** 新手教程启动：单局覆写稀疏生成 + 顺序引导（绝不修改共享配置） */
     private startTutorial() {
         if (!this.core || !this.save) return;
         this.tutorialRun = true;
@@ -414,24 +461,31 @@ export class Game extends Component {
         return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
     }
 
-    /** 按模式启动；记录模式（core.mode 影响征途判定与太阳进度） */
+    /** 按模式启动；通过单局覆写与 startBuffs 注入核心，不直接修改核心内部计时器或共享配置 */
     private startMode(mode: 'endless' | 'journey', tutorial = false) {
         const core = this.core!;
         this.closePage();
         if (this.tutorialRun && !tutorial) {
             this.tutorialRun = false;
-            this.ledger.endTutorial(core.cfg.spawn, core.cfg.map);
+            core.setRunOverrides(this.ledger.endTutorial());
         }
-        this.ledger.beginRun(core.cfg.spawn, core.cfg.map, tutorial);
+        const { runId, overrides } = this.ledger.beginRun(tutorial);
+        const startBuffs = this.adRewards.consumeStartBuffs();
+        if (this.save && this.skins) {
+            const activeSkinId = this.adRewards.onRunStartSkin(this.save.data.skin);
+            this.skinIdx = this.resolveCatalogSkinIdx(activeSkinId);
+            this.applySkin();
+            this.hud?.setSkinIdx(this.skinIdx, this.skins.skins.map((x) => x.label));
+        }
         this.applyMods();
         this.stats.onRunStart();
         this.quests.resetRunMetrics();
-        this.sync = { totalLi: 0, totalFrags: 0, itemUses: {} };
+        this.sync = { totalLi: 0, totalFrags: 0, itemUses: { ...this.stats.stats.itemUses } };
+        this.lastThemeIdx = 0;
         this.lastStep = -1;
         this.ad?.stats.record('run_start', mode);
         this.persist();
-        core.mode = mode;
-        core.startRun();
+        core.startRun({ seed: runId, mode, overrides, startBuffs });
     }
 
     /** 强化效果注入核心（五系全部生效，公平性：不含速度） */
@@ -541,9 +595,11 @@ export class Game extends Component {
                 const costs: Record<string, number> = { xuanjia: 600, chiyan: 800, cangteng: 800, jinwu: 1200, weishui: 1000, huangmo: 1000, fusang: 2000 };
                 if (this.save.data.skinsOwned.includes(id) || !this.economy.spend(costs[id] ?? 9999)) return;
                 this.save.data.skinsOwned.push(id);
+            } else if (!this.save.data.skinsOwned.includes(id)) {
+                return;
             }
             this.save.data.skin = id;
-            this.skinIdx = Math.max(0, this.skins.skins.findIndex((x) => x.id === id));
+            this.skinIdx = this.resolveCatalogSkinIdx(id);
             this.persist();
             this.applySkin();
             this.hud?.setSkinIdx(this.skinIdx, this.skins.skins.map((x) => x.label));
@@ -574,7 +630,8 @@ export class Game extends Component {
                 this.upgrades = new Upgrades(d.upgrades);
                 this.applyMods();
                 this.ad?.loadStats(d.ads);
-                this.skinIdx = Math.max(0, d.skinsOwned.indexOf(d.skin));
+                this.sync = { totalLi: 0, totalFrags: 0, itemUses: { ...this.stats.stats.itemUses } };
+                this.skinIdx = this.resolveCatalogSkinIdx(d.skin);
                 this.applySkin();
                 this.hud?.setSkinIdx(this.skinIdx, this.skins?.skins.map((x) => x.label) ?? []);
                 this.refreshPage();
