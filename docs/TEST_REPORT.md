@@ -152,6 +152,20 @@
 回归：lint 0；type-check 0；微信构建成功（exit=36，初始场景错误 0）；web-desktop headless Chrome 启动无异常。
 真机/触控/真实广告/FPS 未验证，见 PHASE8_REPORT.md 第 6、7 节。
 
+### Phase 8.1（核心引擎正确性审查与修复，2026-11-26）
+
+`npm test` → **244/244 通过**（17 个测试文件，新增 `phase8-1-repro.spec.ts` 11 项最小复现回归 + `phase8-1-engine.spec.ts` 12 项深度验证）：
+
+- 缺陷最小复现与回归 11 项（修复前 11/11 全部复现失败，修复后 11/11 全绿）：20 FPS 时间丢失、`maxDz` 坐标误传、同距离可达性未合并、高速冲刺拾取穿透、错过转弯同帧继续推进、复活后旧路口阻塞/再死、同种子重置不完整、金币倍率逐枚取整丢失、`coolRuns` 误判、教程覆写污染共享配置、存档越界/高版本覆盖/存储异常。
+- 跨帧率确定性 3 项：**20 / 30 / 60 / 120 FPS** 固定逻辑帧脚本状态**完全位等价**；不规则帧时间（8ms~67ms 抖动）与 60 FPS 位等价；5s 后台卡顿与 `onBackgroundResume()` 保护。
+- 独立随机流 1 项：装饰 `propInterval` 变更对障碍/掉落流零扰动。
+- 连续运动与碰撞 4 项：角色宽度中点擦边、相邻车道安全、连续滚石 `visLane`、滑铲身高净空。
+- **1000 种子真实可达性重放**（零无敌、开启碰撞、全 22 种障碍 + 90° 转弯）：`deaths=0 / 1000 seeds`，`turns=3075`，`plansExecuted=710305`。
+- 独立无敌压力测试保留于 `phase8-stress.spec.ts`，明确限定仅用于生成、资源回收与稳定性验证。
+- 全链路集成 3 项：复活后二次增量结算、广告 5 场景事务（`AdRewardCoordinator` 防重复翻倍/防迟到回调串局/`timedPower` 跨开局/`skinTrial` 单局归还/`dailyDouble` 跨日拒领）、存档恢复全路径（v1 迁移/备份恢复/双档损坏隔离/v3 写锁保护/存储异常捕获）。
+
+回归：`npm run type-check` 0 错；`npm run lint` 0 错；Cocos Creator 3.8.8 微信构建（`./scripts/build-wechat.sh`）成功（exit=36，Missing class = 0，`main/index.js` 403KB，`AdRewardCoordinator`/`FIXED_DT`/`isSafeSpawnRange`/`sanitizeSaveData` 全部入包）。详见 `docs/PHASE8_1_REPORT.md`。
+
 ### 待人工验证（无法自动化）
 
 - Phase 8 真机兼容矩阵（Android 低/中/高 + iOS）与微信开发者工具主包/分包体积

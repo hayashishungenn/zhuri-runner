@@ -76,6 +76,21 @@
 - 报告：PHASE8_REPORT.md
 - 测试期配置（用户指令）：`ad.enabled=false` 隐藏全部广告入口；默认静音且随存档持久化（KNOWN_ISSUES #20/#25，发布前需恢复）
 
+## P8.1 — 核心引擎正确性审查与修复 ✅（代码与构建完成，等待独立审查验收）
+
+- [x] 固定时间步长（60Hz 累加器 + `MAX_FRAME_DT`/`MAX_SUB_STEPS` + `renderAlpha` 插值 + 后台恢复）
+- [x] 统一地图坐标语义（`toAbsD`/`toRelZ` + `SegmentPath.isSafeSpawnRange` 完整区间校验，修复 `maxDz` 相对坐标误传）
+- [x] `Reachability` 与 `GameCore` 规则对齐（同距离合并、`laneReady`/`actionReady` 分离、可执行 `plan` 输出、抵达预期速度校验），通过 **1000 种子零无敌真实核心重放（0 死亡）**
+- [x] 连续扫描碰撞与运动模型（`[currZ,prevZ]` 防穿透、角色宽度、跳跃/滑铲高度、连续滚石 `visLane`）
+- [x] 状态机与复活修复（禁止 `crash` 后同帧推进、清理旧路口防阻塞与复活再死、复活后增量结算）
+- [x] 单局主种子派生 4 条独立随机流（map/obstacle/drop/decor）与完整运行态重置（含 `runTime` 与 `mapGen.difficulty`）
+- [x] 经济/成长/任务/皮肤/成就集成修复（累计取整金币倍率、征途失败结算、跨局 `itemUses` 同步、皮肤目录索引与所有权校验、`coolRuns`/`totalFrags`/`journeys` 精确判定）
+- [x] 广告奖励事务协调器 `AdRewardCoordinator`（绑定 `runId` 与快照、单局金币翻倍幂等、`timedPower` 跨开局注入、`skinTrial` 单局归还、防迟到回调串局）
+- [x] 教程单局模式参数覆写 `RunModeOverrides`/`MapRunOverrides`（不修改共享配置且与 `MapGenerator` 一致）
+- [x] 存档安全加固（全字段范围清洗、高版本写锁防静默覆盖、双档损坏隔离、存储异常安全降级）
+- [x] 验证：type-check 0 错、lint 0 错、244/244 单测与重放全绿、Cocos 3.8.8 微信构建 0 Missing class
+- 报告：`docs/PHASE8_1_REPORT.md`；**本阶段已停止，等待独立审查验收后再进入后续美术与手感阶段**
+
 ## 人工验证项（待用户）
 
 - [ ] 微信开发者工具：首次使用需在「设置 → 安全设置」开启**服务端口**并扫码登录，之后 CLI/自动化才能工作（本次 CLI 已验证报 `.cli` 缺失，即此状态）
