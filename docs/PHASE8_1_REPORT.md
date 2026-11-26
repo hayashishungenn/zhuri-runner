@@ -18,10 +18,22 @@
 | **P8.1-09** | Critical | 9. 教程配置覆盖隔离 | `core/RunLedger.ts:42-74`、`core/GameCore.ts:95-98`、`core/MapGenerator.ts:70` | 开启新手教程 | `RunLedger` 直接改写共享 `cfg.spawn`/`cfg.map` 污染配置，且 `MapGenerator` 持有浅拷贝导致 `turnGapMin/Max` 覆写从未生效 | 废除配置直接改写；新增 `RunModeOverrides` / `MapRunOverrides`，`RunLedger.beginRun(tutorial)` 返回不可变覆写对象，`GameCore.startRun({overrides})` 与 `MapGenerator.setOverrides` 同步生效，结束教程/重开自动还原 | `phase8-1-repro.spec.ts` BUG-09；`phase8.spec.ts` 教程覆写一致性测试全绿 | 无已知逻辑风险 |
 | **P8.1-10** | High | 10. 存档安全与恢复 | `platform/Save.ts:101-167` | 存档字段越界/类型损坏；高版本存档 (`v:3`)；存储空间满或隐私模式抛异常 | `parseSave` 未清洗负值/越界等级/缺失默认皮肤；高版本存档被 `load()` 静默覆盖为 v2 空档；存储异常致构造函数崩溃 | 新增 `sanitizeSaveData` 全字段类型与范围清洗；`inspectSaveVersion` 识别 `v > 2` 时启用 `writeLocked=true` 禁止静默覆盖；双档损坏时保留原串于 `zhuri.save.corrupt` 并暴露 `loadStatus`；所有存储读写 try/catch 捕获并返回 `flush(): boolean` | `phase8-1-repro.spec.ts` BUG-10；`phase8-1-engine.spec.ts` 存档恢复全路径测试全绿 | 云存档（微信云开发）仍未接入（KNOWN_ISSUES #19） |
 
-## 二、验证结论
+## 二、独立对抗审查复验与二次加固
+
+在首轮提交后，独立上下文审查子代理（`Independent Phase 8.1 Reviewer`）提出 2 项 High、4 项 Medium 与 6 项 Low 改进建议，已全部核实并完成二次修复：
+
+1. **1000 种子重放覆盖全难度层级与移动障碍**（High）：将 `phase8-1-engine.spec.ts` 1000 种子零无敌重放扩展至 `dist = 0 / 700 / 1500` 三档起步（覆盖 Tier 0/1/2 + 满速），实测 `tiers=[0,1,2]`、`moving=[moverGuard,roller,swingLog]`、`multiLane=397657`、`turns=3898`、`plans=574658`、**`deaths=0`**。
+2. **`spawnWave` 在途动作窗与 `reachInit` 对齐**（High）：过滤正在穿越中的近身动作障碍并传入 `actionReady`，消除在途跳跃/滑铲时的假阴性 `fullRejects`。
+3. **`Reachability` 跨槽变道守卫**（Medium）：`transitionSafeAcrossSlot` 增加 `st.laneReady <= slot.d` 前置校验并补齐单测。
+4. **`skinTrial` 复活保留**（Medium）：`Game.settleRun()` 仅在不可再复活或已通关时归还试用皮肤，复活后继续保留本局试用皮肤。
+5. **渲染插值接线**（Medium）：`Renderer3D.placeKuafu` 与 `Renderer2D.drawKuafu` 接入 `core.interpDist`/`core.interpPlayerLaneF`/`core.interpJumpT`。
+6. **恢复 `phase8-balance.spec.ts` 原断言**（Medium）：修复 `spawnWave` 假拒绝后 `skilled:noad` 达成 `upgrades=10, skins=1`，已恢复原始 `skins >= 1` 断言。
+7. **细节加固**（Low）：无敌期不误耗 `staffCharges`；`revive()` 剪除 `lastWaveEvents` 并同步插值快照；`spawnWave`/`spawnProp` 移至实体推进后消除 1-tick `absD` 偏移；补齐 `CCGame.EVENT_SHOW` 监听；跨日刷新后立即同步 `save.data.quests`。
+
+## 三、验证结论
 
 - `npm run type-check`：0 错误
 - `npm run lint`：0 错误，0 警告
-- `npm test`：**17/17 测试文件、244/244 用例全绿**（含 1000 种子零无敌真实可达性重放 `deaths=0`、20/30/60/120 FPS 与不规则帧时间位等价、1000 局压力测试、存档/经济/广告全链路集成）
-- Cocos Creator 3.8.8 微信构建（`./scripts/build-wechat.sh`）：成功（exit=36，Missing class = 0，`main/index.js` = 403KB，新模块全部入包）
+- `npm test`：**17/17 测试文件、246/246 用例全绿**（含 1000 种子覆盖 Tier 0/1/2 + 全部移动障碍零无敌真实核心重放 `deaths=0`、20/30/60/120 FPS 与不规则帧时间位等价、1000 局压力测试、存档/经济/广告全链路集成）
+- Cocos Creator 3.8.8 微信构建（`./scripts/build-wechat.sh`）：成功（exit=36，Missing class = 0）
 - 人工真机与平台权限阻塞项（微信开发者工具服务端口、真实广告位 ID、Android/iOS 真机实测、包体分包确认）仍单独记录于 `KNOWN_ISSUES.md` 与 `PROGRESS.md`。

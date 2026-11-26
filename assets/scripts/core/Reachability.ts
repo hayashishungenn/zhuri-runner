@@ -143,9 +143,9 @@ export function validateReachability(
                     : laneDelta * ability.laneChangeDist + ability.reactionDist;
 
                 if (req === 'none') {
-                    // 空车道：若在 slot.d 前可完成变道，或源/目标（及中间）车道在 slot.d 均无障碍（允许跨 slot 连续变道）
+                    // 空车道：若在 slot.d 前可完成变道，或上一个变道已就绪（laneReady <= slot.d）且源/目标（及中间）车道在 slot.d 均无障碍
                     const midClear = laneDelta < 2 || slot.req[(st.lane + targetLane) / 2] === 'none';
-                    const transitionSafeAcrossSlot = laneDelta > 0 && slot.req[st.lane] === 'none' && midClear;
+                    const transitionSafeAcrossSlot = laneDelta > 0 && st.laneReady <= slot.d && slot.req[st.lane] === 'none' && midClear;
                     if (slot.d - st.laneReady >= moveDist || transitionSafeAcrossSlot) {
                         const actions = laneDelta > 0
                             ? [...st.plan, {

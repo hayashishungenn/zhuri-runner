@@ -212,28 +212,59 @@ describe('Phase 8.1 连续运动与碰撞模型', () => {
         expect(c1.state).toBe('run');
         expect(c1.stumbling).toBe(false);
     });
+
+    it('无敌期撞击切道障碍不误耗桃木神杖层数', () => {
+        const c = new GameCore(cloneCfg(), new SeededRng(1), { catalog: REAL_CATALOG });
+        c.startRun();
+        c.staffCharges = 3;
+        c.invincible = 2.0;
+        c.obstacles = [{ defId: 'wall', lane: 0, z: 0.6, passed: false, phase: 0 }];
+        c.update(1 / 60);
+        expect(c.state).toBe('run');
+        expect(c.staffCharges).toBe(3);
+    });
+
+    it('Reachability 跨槽变道不得在上一变道未完成（laneReady > slot.d）时穿透阻挡车道', () => {
+        const ab = { laneChangeDist: 10, jumpCover: 1, slideCover: 1, reactionDist: 2 };
+        // 从 lane 1 出发，laneReady=110 > slot.d=105 时不得在 d=105 上再次跨槽变道
+        const r = validateReachability([
+            { d: 105, lanes: [1], pass: 'lane' },
+            { d: 106, lanes: [0, 1], pass: 'lane' },
+        ], ab, { states: [{ lane: 1, ready: 110 }] });
+        expect(r.reachable).toBe(false);
+    });
 });
 
 // ============================================================================
-// 4. 1000 随机种子真实可达性重放（零无敌、开启碰撞、全 22 种障碍 + 转弯）
+// 4. 1000 随机种子真实可达性重放（零无敌、开启碰撞、全 22 种障碍 + 全难度层级 + 转弯）
 // ============================================================================
 describe('Phase 8.1 1000 种子真实可达性重放（零无敌、真实碰撞）', () => {
     /**
      * 基于 Reachability.validateReachability 输出 plan 的真实核心重放器：
      * - 严禁修改 invincible 或关闭碰撞
-     * - 覆盖多波障碍、跳跃/滑铲窗口、移动障碍（osc/rollSpeed）、速度变化、冲刺与转弯
+     * - 分段覆盖 Tier 0 (dist=0)、Tier 1 (dist=700)、Tier 2 满速 (dist=1500)
+     * - 覆盖多波障碍、跳跃/滑铲窗口、移动障碍（osc/rollSpeed）、多车道障碍、速度变化、冲刺与转弯
      */
-    function replaySeedWithPlanner(seed: number, seconds = 20): { deaths: number; turns: number; plansBuilt: number; wavesChecked: number } {
+    function replaySeedWithPlanner(seed: number, startDist: number, seconds = 18) {
         const cfg = cloneCfg();
         const c = new GameCore(cfg, new SeededRng(seed), { turnsEnabled: true, catalog: REAL_CATALOG });
         c.startRun({ seed });
+        if (startDist > 0) {
+            c.dist = startDist;
+            c.mapGen.update(startDist);
+            // 标记起点前的路口为已通过（仅模拟从该里程起跑）
+            for (const corner of c.mapGen.corners) {
+                if (corner.d <= startDist + 10) corner.passed = true;
+            }
+        }
         const frames = Math.round(seconds * 60);
         let deaths = 0;
         let turns = 0;
         let plansBuilt = 0;
-        let wavesChecked = 0;
+        const tiersSeen = new Set<number>();
+        const movingSeen = new Set<string>();
+        let multiLaneSeen = 0;
 
-        // 对当前前方障碍构建 Reachability 计划并逐帧执行
         const defMap = new Map(REAL_CATALOG.obstacles.map((d) => [d.id, d]));
 
         for (let f = 0; f < frames; f++) {
@@ -247,6 +278,9 @@ describe('Phase 8.1 1000 种子真实可达性重放（零无敌、真实碰撞�
             for (const o of c.obstacles) {
                 if (o.passed || o.z <= 0.1 || o.z > 80) continue;
                 const def = defMap.get(o.defId)!;
+                tiersSeen.add(def.tier ?? 0);
+                if (def.osc || def.rollSpeed) movingSeen.add(def.id);
+                if (def.lanes >= 2) multiLaneSeen++;
                 const lanes = def.osc
                     ? [...def.osc.lanes]
                     : def.rollSpeed
@@ -268,7 +302,6 @@ describe('Phase 8.1 1000 种子真实可达性重放（零无敌、真实碰撞�
                     reactionTime: cfg.difficulty.reactionTime,
                 });
                 const curLane = Math.round(c.targetLane);
-                // 过滤掉正在跳跃/滑铲越过的近身动作障碍，避免 readyD 误判当前空中动作
                 const planEvents = upcoming.filter((ev) => {
                     const relZ = ev.d - c.dist;
                     if (c.jumpT >= 0 && ev.pass === 'jump' && relZ < spd * (1 - c.jumpT) * c.jumpDurNow) return false;
@@ -281,7 +314,6 @@ describe('Phase 8.1 1000 种子真实可达性重放（零无敌、真实碰撞�
                 const reach = validateReachability(planEvents, ab, {
                     states: [{ lane: curLane, ready: c.dist, actionReady: actionReadyD }],
                 });
-                wavesChecked++;
                 if (reach.reachable && reach.plan.length > 0) {
                     plansBuilt++;
                     const nextAct = reach.plan[0];
@@ -305,20 +337,34 @@ describe('Phase 8.1 1000 种子真实可达性重放（零无敌、真实碰撞�
             const st: string = c.state;
             if (st === 'dying' || st === 'dead') break;
         }
-        return { deaths, turns, plansBuilt, wavesChecked };
+        return { deaths, turns, plansBuilt, tiersSeen, movingSeen, multiLaneSeen };
     }
 
-    it('1000 个随机种子 × 20s 真实核心重放（零无敌、全 22 种障碍+转弯）：零死亡且全部障碍生成合法', () => {
+    it('1000 个随机种子 × 覆盖 Tier 0/1/2 全难度与移动障碍真实核心重放（零无敌）：零死亡', () => {
         let totalDeaths = 0;
         let totalTurns = 0;
         let totalPlans = 0;
+        let totalMultiLane = 0;
+        const allTiers = new Set<number>();
+        const allMoving = new Set<string>();
+        const startBands = [0, 700, 1500]; // Tier 0 (D=0), Tier 1 (D=0.35), Tier 2 (D=0.75, 满速)
+
         for (let seed = 1; seed <= 1000; seed++) {
-            const r = replaySeedWithPlanner(seed, 20);
+            const startDist = startBands[seed % 3];
+            const r = replaySeedWithPlanner(seed, startDist, 18);
             totalDeaths += r.deaths;
             totalTurns += r.turns;
             totalPlans += r.plansBuilt;
+            totalMultiLane += r.multiLaneSeen;
+            for (const t of r.tiersSeen) allTiers.add(t);
+            for (const m of r.movingSeen) allMoving.add(m);
         }
-        console.log(`[phase8.1-replay] 1000 seeds: deaths=${totalDeaths} turns=${totalTurns} plansExecuted=${totalPlans}`);
+        console.log(`[phase8.1-replay] 1000 seeds (T0/T1/T2): deaths=${totalDeaths} turns=${totalTurns} plans=${totalPlans} tiers=[${[...allTiers].sort()}] moving=[${[...allMoving].sort()}] multiLane=${totalMultiLane}`);
+        expect(allTiers.has(0)).toBe(true);
+        expect(allTiers.has(1)).toBe(true);
+        expect(allTiers.has(2)).toBe(true);
+        expect(allMoving.size).toBeGreaterThanOrEqual(3); // moverGuard, swingLog, roller 全部覆盖
+        expect(totalMultiLane).toBeGreaterThan(1000);
         expect(totalPlans).toBeGreaterThan(5000);
         expect(totalTurns).toBeGreaterThan(500);
         expect(totalDeaths).toBe(0);

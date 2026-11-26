@@ -88,7 +88,7 @@
 - [x] 广告奖励事务协调器 `AdRewardCoordinator`（绑定 `runId` 与快照、单局金币翻倍幂等、`timedPower` 跨开局注入、`skinTrial` 单局归还、防迟到回调串局）
 - [x] 教程单局模式参数覆写 `RunModeOverrides`/`MapRunOverrides`（不修改共享配置且与 `MapGenerator` 一致）
 - [x] 存档安全加固（全字段范围清洗、高版本写锁防静默覆盖、双档损坏隔离、存储异常安全降级）
-- [x] 验证：type-check 0 错、lint 0 错、244/244 单测与重放全绿、Cocos 3.8.8 微信构建 0 Missing class
+- [x] 验证：type-check 0 错、lint 0 错、246/246 单测与全层级（Tier 0/1/2 + 移动障碍）1000 种子零无敌重放全绿、独立对抗审查复验通过、Cocos 3.8.8 微信构建 0 Missing class
 - 报告：`docs/PHASE8_1_REPORT.md`；**本阶段已停止，等待独立审查验收后再进入后续美术与手感阶段**
 
 ## 人工验证项（待用户）

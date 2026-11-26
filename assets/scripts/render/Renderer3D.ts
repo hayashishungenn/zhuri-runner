@@ -699,7 +699,10 @@ export class Renderer3D implements IRenderer {
     }
 
     private placeKuafu(core: GameCore) {
-        const p = core.path.sample(core.dist, core.playerLaneF * LANE_W3);
+        const dNow = core.interpDist;
+        const laneNow = core.interpPlayerLaneF;
+        const jumpNow = core.interpJumpT;
+        const p = core.path.sample(dNow, laneNow * LANE_W3);
         const r = this.world.toRender(p);
         this.playerX = r.x;
         this.kuafu.root.setPosition(r.x, r.y, r.z);
@@ -709,13 +712,13 @@ export class Renderer3D implements IRenderer {
                 : core.state === 'title' ? 'idle'
                     : core.stumbling ? 'stumble'
                         : core.slideT >= 0 ? 'slide'
-                            : core.jumpT >= 0 ? 'jump'
+                            : jumpNow >= 0 ? 'jump'
                                 : 'run';
         this.kuafu.update(this.dt, {
             state: animState,
             runPhase: core.runPhase,
             hop: this.kuafu.lastHop,
-            jumpT: core.jumpT,
+            jumpT: jumpNow,
             slideT: core.slideT,
             stumbleT: core.stumbleTimer,
             gTime: core.gTime,

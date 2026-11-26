@@ -366,10 +366,11 @@ export class GameCore {
     revive(): boolean {
         if (this.reviveUsed || this.state !== 'dead') return false;
         this.reviveUsed = true;
-        // 清除近处障碍（z <= reviveKeepZ），保留远景
+        // 清除近处障碍（z <= reviveKeepZ），保留远景；同步剪除对应的历史波事件
         this.obstacles = this.obstacles.filter((o) => o.z > this.cfg.player.reviveKeepZ);
-        // 清理已过或位于复活保护区内的路口，避免旧路口阻塞或复活瞬间再次撞墙
         const safeCornerD = this.dist + this.cfg.player.reviveKeepZ;
+        this.lastWaveEvents = this.lastWaveEvents.filter((e) => e.d > safeCornerD);
+        // 清理已过或位于复活保护区内的路口，避免旧路口阻塞或复活瞬间再次撞墙
         for (const c of this.mapGen.corners) {
             if (c.d <= safeCornerD) c.passed = true;
         }
@@ -380,6 +381,10 @@ export class GameCore {
         this.jumpT = -1; this.slideT = -1;
         this.dieTimer = -1;
         this.simAccumulator = 0;
+        this.renderAlpha = 0;
+        this.prevDist = this.dist;
+        this.prevPlayerLaneF = this.playerLaneF;
+        this.prevJumpT = -1;
         this.state = 'run';
         this.timeScale = 1;
         return true;
@@ -587,18 +592,6 @@ export class GameCore {
         if (this.slideT >= 0) { this.slideT -= dt; if (this.slideT < 0) this.slideT = -1; }
         this.runPhase += dt * (6 + spd * 0.35);
 
-        // 生成（保留余数，避免跨帧率相位漂移）
-        this.spawnAcc += spd * dt;
-        const rowInt = this.rowIntervalNow();
-        while (this.spawnAcc >= rowInt) {
-            this.spawnAcc -= rowInt;
-            this.spawnWave();
-        }
-        this.propAcc += spd * dt;
-        while (this.propAcc >= c.spawn.propInterval) {
-            this.propAcc -= c.spawn.propInterval;
-            this.spawnProp();
-        }
         // 地图生成难度联动（转弯频率随难度提升）
         this.mapGen.difficulty = this.difficulty;
 
@@ -647,8 +640,8 @@ export class GameCore {
                     else if (effPass === 'slide') safe = sliding;
                 }
 
-                // 桃木神杖：撞上切道/时机类障碍时消耗 1 层将其击碎
-                if (!safe && this.staffCharges > 0 && (def.pass === 'lane' || def.pass === 'timing')) {
+                // 桃木神杖：仅非无敌期撞上切道/时机类障碍时消耗 1 层将其击碎（避免冲刺/复活无敌期误耗）
+                if (!safe && this.invincible <= 0 && this.staffCharges > 0 && (def.pass === 'lane' || def.pass === 'timing')) {
                     this.staffCharges--;
                     this.invincible = Math.max(this.invincible, 0.8);
                     o.z = -3;
@@ -743,6 +736,19 @@ export class GameCore {
         for (let i = this.props.length - 1; i >= 0; i--) {
             this.props[i].z -= spd * dt;
             if (this.props[i].z < c.world.despawnZ) this.props.splice(i, 1);
+        }
+
+        // 在既有实体推进完成后再生成新波与装饰（避免同帧立刻扣减 spd*dt 造成 1-tick absD 偏移）
+        this.spawnAcc += spd * dt;
+        const rowInt = this.rowIntervalNow();
+        while (this.spawnAcc >= rowInt) {
+            this.spawnAcc -= rowInt;
+            this.spawnWave();
+        }
+        this.propAcc += spd * dt;
+        while (this.propAcc >= c.spawn.propInterval) {
+            this.propAcc -= c.spawn.propInterval;
+            this.spawnProp();
         }
     }
 
@@ -850,9 +856,16 @@ export class GameCore {
         for (let l = -this.laneMax; l <= this.laneMax; l++) lanesFree.push(l);
         const usedLanes = new Set<number>();
 
-        // 保留全部仍在玩家前方的未通过障碍参与跨波可达性验证（避免漏检近身波对车道的约束）
+        // 保留仍在玩家前方且尚未进入当前已承诺动作窗的障碍参与跨波可达性验证
+        const curSpd = Math.max(this.speed, this.effectiveSpeed);
         const pruneD = this.toAbsD(c.obstacle.hitZ);
-        const upcoming = this.lastWaveEvents.filter((e) => e.d > pruneD);
+        const upcoming = this.lastWaveEvents.filter((e) => {
+            if (e.d <= pruneD) return false;
+            const relZ = e.d - this.dist;
+            if (this.jumpT >= 0 && e.pass === 'jump' && relZ < curSpd * (1 - this.jumpT) * this.jumpDurNow) return false;
+            if (this.slideT >= 0 && e.pass === 'slide' && relZ < curSpd * this.slideT) return false;
+            return true;
+        });
         // 使用玩家抵达本波最远步进时的预期速度（含加速增长、冲刺倍率与 12% 判定余量），避免生成时可达、抵达时因增速/帧量化不可达
         const arrivalSpeed = c.speed.base + Math.min((frontAbsD + 20) * c.speed.gain, c.speed.gainCap);
         const evalSpeed = Math.max(arrivalSpeed, this.effectiveSpeed) * 1.12;
@@ -862,8 +875,11 @@ export class GameCore {
             slideDuration: c.player.slideDuration,
             reactionTime: c.difficulty.reactionTime,
         });
+        const actionReadyD = this.jumpT >= 0
+            ? this.dist + (1 - this.jumpT) * this.jumpDurNow * curSpd
+            : this.dist;
         const reachInit = {
-            states: [{ lane: Math.round(this.targetLane), ready: this.dist }],
+            states: [{ lane: Math.round(this.targetLane), ready: this.dist, actionReady: actionReadyD }],
         };
 
         // ---- 模板路径 ----

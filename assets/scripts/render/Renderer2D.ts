@@ -291,9 +291,10 @@ export class Renderer2D implements IRenderer {
 
     private drawKuafu(g: Graphics, core: GameCore) {
         const S = 1.6;
-        const px = LX(LOGICAL_W / 2 + core.playerLaneF * this.cfg.world.laneWidth);
-        const air = core.jumpT >= 0;
-        const hop = air ? Math.sin(core.jumpT * Math.PI) * 92 : 0;
+        const px = LX(LOGICAL_W / 2 + core.interpPlayerLaneF * this.cfg.world.laneWidth);
+        const jt = core.interpJumpT;
+        const air = jt >= 0;
+        const hop = air ? Math.sin(jt * Math.PI) * 92 : 0;
         const sliding = core.slideT >= 0;
         const baseY = LY(PLAYER_Y - hop);
         // 影子

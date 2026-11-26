@@ -95,6 +95,7 @@ export class Game extends Component {
         this.economy = new Economy(this.save.data.gold, this.save.data.txLog);
         this.stats = new PlayerStats(this.save.data.stats);
         this.quests = new DailyQuests(this.save.data.quests, this.today());
+        this.save.data.quests = { ...this.quests.state };   // 跨日刷新后立即同步，防首局前打开任务页读到旧日 claimed
         this.upgrades = new Upgrades(this.save.data.upgrades);
         this.sync = { totalLi: 0, totalFrags: 0, itemUses: { ...this.stats.stats.itemUses } };
         if (!this.save.data.skinsOwned.includes(this.save.data.skin)) {
@@ -143,8 +144,9 @@ export class Game extends Component {
                 this.refreshPage();
             },
         });
-        // 退后台自动暂停（微信 onHide / 浏览器切页），回到前台由玩家手动恢复
+        // 退后台自动暂停 / 回前台重置步长累加器与音频（微信生命周期 + Cocos 事件双兜底）
         game.on(CCGame.EVENT_HIDE, this.onGameHide, this);
+        game.on(CCGame.EVENT_SHOW, this.onGameShow, this);
         log.info('装配完成');
     }
 
@@ -155,6 +157,7 @@ export class Game extends Component {
         this.ad?.dispose();
         this.lifecycleDispose?.();
         game.off(CCGame.EVENT_HIDE, this.onGameHide, this);
+        game.off(CCGame.EVENT_SHOW, this.onGameShow, this);
     }
 
     private onGameHide() {
@@ -356,8 +359,8 @@ export class Game extends Component {
             this.ad?.noteRunEnd();
             this.ad?.maybeShowInterstitial();
         }
-        // 试用皮肤单局结束后归还为已拥有皮肤
-        if (this.save && this.skins) {
+        // 试用皮肤仅在彻底结束（不可再复活或已通关）时归还；若玩家选择复活则本局继续保留
+        if (this.save && this.skins && (!core.reviveUsable() || core.state === 'ended')) {
             const revertedId = this.adRewards.onRunEndSkin(this.save.data.skin);
             this.skinIdx = this.resolveCatalogSkinIdx(revertedId);
             this.applySkin();
@@ -627,6 +630,7 @@ export class Game extends Component {
                 this.economy = new Economy(d.gold, d.txLog);
                 this.stats = new PlayerStats(d.stats);
                 this.quests = new DailyQuests(d.quests, this.today());
+                this.save.data.quests = { ...this.quests.state };
                 this.upgrades = new Upgrades(d.upgrades);
                 this.applyMods();
                 this.ad?.loadStats(d.ads);
