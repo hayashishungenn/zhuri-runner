@@ -9,6 +9,7 @@ import { IPlatform } from '../assets/scripts/platform/IPlatform';
 import { MockRewardedAdapter, MockInterstitialAdapter, MockOutcome } from '../assets/scripts/platform/mock/MockAdAdapter';
 
 const BASE_CFG: AdServiceCfg = {
+    enabled: true,
     mode: 'mock',
     timeoutMs: 60,
     adUnitIds: { revive: 'unit-revive', doubleCoins: 'unit-double' },
@@ -83,6 +84,18 @@ describe('激励视频状态机', () => {
 });
 
 describe('广告场景与平台隔离', () => {
+    it('总开关关闭（ad.enabled=false）→ 全场景明确不可用，可玩性测试期不发奖', async () => {
+        const { ad, rewarded } = makeService('success', { enabled: false });
+        for (const s of ['revive', 'doubleCoins', 'dailyDouble', 'timedPower', 'skinTrial'] as const) {
+            expect(ad.canUse(s)).toEqual({ ok: false, reason: 'disabled' });
+        }
+        expect(ad.maybeShowInterstitial()).toBe(false);
+        const r = await ad.requestReward('revive', () => { throw new Error('不应发奖'); });
+        expect(r.rewarded).toBe(false);
+        expect(r.reason).toBe('disabled');
+        expect(rewarded.loadCalls).toBe(0);
+    });
+
     it('广告位未配置 → 明确 noAdUnit（不伪造成功）', async () => {
         const { ad } = makeService('success', { adUnitIds: {} });
         const check = ad.canUse('revive');

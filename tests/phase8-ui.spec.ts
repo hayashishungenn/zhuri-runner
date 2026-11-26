@@ -64,14 +64,16 @@ import { SeededRng } from '../assets/scripts/core/rng';
 import { DEFAULT_CONFIG as CFG } from '../assets/scripts/config/GameConfigSchema';
 import { Node, Color } from 'cc';
 
-function makeHud() {
-    const hud = new Hud2D(new Node('root') as never, CFG);
+function makeHud(ads = true) {
+    // CFG 当前为测试期默认（ad.enabled=false）；按参数显式构造两种模式
+    const cfg = { ...CFG, ad: { ...CFG.ad, enabled: ads } };
+    const hud = new Hud2D(new Node('root') as never, cfg);
     const core = new GameCore(CFG, new SeededRng(1));
     return { hud, core };
 }
 
 describe('HUD 命中与 UI 流程（Phase 8）', () => {
-    it('标题/奔跑/暂停/死亡按钮命中区分状态', () => {
+    it('标题/奔跑/暂停/死亡按钮命中区分状态（广告开启）', () => {
         const { hud, core } = makeHud();
         expect(hud.hitTestButtons(225, 461, core)).toBe('start');
         core.startRun();
@@ -86,6 +88,23 @@ describe('HUD 命中与 UI 流程（Phase 8）', () => {
         expect(hud.hitTestButtons(225, 555, core)).toBe('restart');
         core.reviveUsed = true;
         expect(hud.hitTestButtons(225, 482, core)).toBe(null);
+    });
+
+    it('广告关闭（ad.enabled=false）：全部广告入口隐藏，重开占用复活位', () => {
+        const { hud, core } = makeHud(false);
+        expect(hud.hitNavButton(340, 650)).toBe(null);        // 「奖励」页隐藏
+        core.state = 'dead';
+        expect(hud.hitTestButtons(225, 482, core)).toBe('restart');   // 复活位 → 重开
+        expect(hud.hitTestButtons(225, 517, core)).toBe(null);        // 金币 ×2 消失
+        expect(hud.hitTestButtons(225, 555, core)).toBe(null);        // 原重开位失效
+        expect(hud.hitTestButtons(427, 41, core)).toBe('mute');       // 静音不受影响
+    });
+
+    it('静音状态可同步（启动恢复存档静音）', () => {
+        const { hud } = makeHud();
+        expect(hud.isMutedVisual).toBe(false);
+        hud.syncMuted(true);
+        expect(hud.isMutedVisual).toBe(true);
     });
 
     it('静音按钮全局命中', () => {

@@ -72,6 +72,7 @@
     "skyRange": 30000
   },
   "ad": {
+    "enabled": false,
     "mode": "mock",
     "timeoutMs": 15000,
     "adUnitIds": {

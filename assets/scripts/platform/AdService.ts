@@ -24,6 +24,8 @@ export interface AdResult {
 }
 
 export interface AdServiceCfg {
+    /** 总开关：false = 全部广告场景明确不可用（可玩性测试期，UI 同步隐藏入口） */
+    enabled: boolean;
     /** mock | wx —— 微信环境强制忽略 mock（不发奖） */
     mode: 'mock' | 'wx';
     /** 按场景的广告位 ID（空字符串 = 明确不支持） */
@@ -82,6 +84,8 @@ export class AdService {
 
     /** 广告是否可用（明确状态，不伪造） */
     canUse(scene: AdScene): { ok: boolean; reason?: AdFailReason } {
+        // 总开关关闭：全部场景明确不可用
+        if (!this.cfg.enabled) return { ok: false, reason: 'disabled' };
         // 微信环境的 mock 模式：隔离，不发奖
         if (this.platform.isWechat && this.cfg.mode === 'mock') {
             return { ok: false, reason: 'unsupported' };
@@ -208,7 +212,7 @@ export class AdService {
     maybeShowInterstitial(): boolean {
         this.applyInterstitialState();
         const c = this.cfg.interstitial;
-        if (!c.enabled) return false;
+        if (!this.cfg.enabled || !c.enabled) return false;
         if (this.completedRuns < c.firstRunProtection) return false;
         const now = Date.now();
         if (now - this.lastInterstitialAt < c.cooldownMs) return false;

@@ -77,7 +77,8 @@ export function defaultSaveData(): SaveDataV2 {
             themeVisited: [0], itemUses: {}, waterDrunk: 0,
             goldEarned: 0, coolRuns: 0,
         },
-        settings: { muted: false },
+        // 测试期默认静音（可玩性验证要求）；静音状态随存档持久化，玩家可再开启
+        settings: { muted: true },
         tutorial: { done: false, skipped: false },
         ads: defaultAdStats(),
     };

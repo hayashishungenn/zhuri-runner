@@ -136,6 +136,8 @@ export interface ObstacleCfg { hitZ: number; pickupZFrom: number; pickupZTo: num
 export interface DeathCfg { slowmo: number; dieDelay: number; dieRate: number; slowmoRecover: number; ambientRecover: number; }
 export interface MilestoneCfg { step: number; liScale: number; skyRange: number; }
 export interface AdCfg {
+    /** 广告总开关：false = 隐藏全部广告入口（可玩性测试期）；接入正式广告位后置 true */
+    enabled: boolean;
     mode: AdMode;
     /** 广告展示超时（毫秒） */
     timeoutMs: number;
@@ -231,6 +233,7 @@ export const DEFAULT_CONFIG: GameConfig = {
     death: { slowmo: 0.25, dieDelay: 0.95, dieRate: 2.8, slowmoRecover: 1.4, ambientRecover: 3 },
     milestone: { step: 1000, liScale: 3, skyRange: 30000 },
     ad: {
+        enabled: false,
         mode: 'mock', timeoutMs: 15000,
         adUnitIds: { revive: '', doubleCoins: '', dailyDouble: '', timedPower: '', skinTrial: '' },
         interstitialUnitId: '',
@@ -330,6 +333,7 @@ export function validateConfig(raw: unknown): string[] {
     }
 
     const ad = obj.ad as Record<string, unknown>;
+    if (typeof ad.enabled !== 'boolean') errs.push('ad.enabled 必须为布尔');
     if (ad.mode !== 'mock' && ad.mode !== 'wx') errs.push(`ad.mode 必须为 'mock'|'wx'，实际：${JSON.stringify(ad.mode)}`);
     if (typeof ad.timeoutMs !== 'number' || ad.timeoutMs < 1000) errs.push('ad.timeoutMs 必须 ≥1000');
     // 广告位 ID 允许为空（未开通流量主时明确不可用），但必须是字符串；禁止在代码中编造 ID

@@ -49,6 +49,11 @@ describe('validateConfig 拒绝非法配置', () => {
         }
     });
 
+    it('ad.enabled 必须为布尔（广告总开关：false=可玩性测试期隐藏入口）', () => {
+        expect(validateConfig(cloneWith((o) => { o.ad.enabled = 'no'; })).some((e) => e.includes('ad.enabled'))).toBe(true);
+        expect(validateConfig(cloneWith((o) => { o.ad.enabled = true; })).filter((e) => e.includes('ad.enabled'))).toHaveLength(0);
+    });
+
     it('广告位 ID 未配置是合法状态（禁止编造正式广告位）', () => {
         // Phase 7：空广告位表示"流量主未开通/未配置"，广告明确不可用，schema 不拒绝
         const cfg = cloneWith((o) => { o.ad.mode = 'wx'; });

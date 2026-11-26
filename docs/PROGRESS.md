@@ -74,6 +74,7 @@
 - [x] 性能：低/中/高画质档位 + Draw Call/包体/帧时间实测
 - [x] 浏览器 web-desktop 构建加载实测（无异常）；真机未验证项单独列于 PHASE8_REPORT.md
 - 报告：PHASE8_REPORT.md
+- 测试期配置（用户指令）：`ad.enabled=false` 隐藏全部广告入口；默认静音且随存档持久化（KNOWN_ISSUES #20/#25，发布前需恢复）
 
 ## 人工验证项（待用户）
 

@@ -35,6 +35,7 @@ function core(seed = 1): GameCore {
 }
 
 const AD_CFG: AdServiceCfg = {
+    enabled: true,
     mode: 'mock', timeoutMs: 40,
     adUnitIds: { revive: 'u-revive' },
     interstitialUnitId: 'u-inter',

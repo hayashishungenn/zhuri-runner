@@ -31,9 +31,13 @@ bash scripts/build-wechat.sh     # Creator CLI → build/wechatgame
 3. 预览 OK 后：开发者工具右上角「上传」→ mp.weixin.qq.com 提交审核
 
 ## 广告接入（Phase 7）
-`game-config.json` → `ad.mode`: `"mock"`（浏览器测试）/ `"wx"`（微信真机）。
+`game-config.json` → `ad.enabled`: **`false`（当前：可玩性测试期，全部广告入口隐藏）**；接入正式广告时改 `true`。
+`ad.mode`: `"mock"`（浏览器测试）/ `"wx"`（微信真机）。
 广告位 ID 在 mp 后台「流量主 → 广告位管理」创建，填入 `ad.adUnitIds`（revive/doubleCoins/dailyDouble/timedPower/skinTrial）与 `ad.interstitialUnitId`；**未取得合法 ID 前保持留空**（代码中不编造广告位，广告明确不可用）。
 微信环境 `mode='mock'` 被强制隔离——正式包不会通过测试广告发奖。
+
+## 声音（测试期）
+默认**静音**（`Save` 默认值，随存档持久化）；右上角喇叭按钮可开/关，重启后保持上次状态。正式发布前如需默认开声，把 `defaultSaveData().settings.muted` 改回 `false`。
 
 ## 文档
 `docs/`：ROADMAP / GAME_DESIGN / ARCHITECTURE / PROGRESS / TEST_REPORT / PHASE8_REPORT / ASSET_LICENSES / KNOWN_ISSUES / RELEASE_CHECKLIST

@@ -100,13 +100,17 @@ export class Game extends Component {
             this.skinIdx = 0;
         }
         this.audio = new AudioMgr(this.node);
+        // 启动即恢复存档静音状态（此前从不恢复：上次静音本次照响）；默认静音见 Save 默认值
+        this.audio.setMuted(this.save.data.settings.muted);
         void this.audio.load();
         log.info('配置加载成功 renderMode=' + cfg.renderMode + ' 障碍种类=' + catalog.obstacles.length);
         this.cfg = cfg;
         // 广告（正式隔离：微信端只走平台适配器，mock 模式在微信端不发奖）
+        // ad.enabled=false 为可玩性测试期总开关：全部场景明确不可用，HUD 同步隐藏入口
         const mockRewarded = this.platform.isWechat ? undefined : new MockRewardedAdapter();
         const mockInterstitial = this.platform.isWechat ? undefined : new MockInterstitialAdapter();
         this.ad = new AdService(this.platform, {
+            enabled: cfg.ad.enabled,
             mode: cfg.ad.mode,
             timeoutMs: cfg.ad.timeoutMs,
             adUnitIds: cfg.ad.adUnitIds,
@@ -116,7 +120,10 @@ export class Game extends Component {
         // 2D 渲染器需先于 Hud2D 创建节点，保证 UI 绘制在世界之上
         if (cfg.renderMode === '2d') this.renderer = new Renderer2D(this.node, cfg, catalog);
         this.hud = new Hud2D(this.node, cfg);
-        if (this.save) this.hud.setBestLi(this.save.data.bestLi);
+        if (this.save) {
+            this.hud.setBestLi(this.save.data.bestLi);
+            this.hud.syncMuted(this.save.data.settings.muted);
+        }
         if (cfg.renderMode === '3d') {
             const r3d = new Renderer3D(cfg, catalog);
             r3d.setTileTemplates(tiles.templates);   // 42 模板驱动渲染装饰（此前从未接线）
@@ -668,9 +675,12 @@ export class Game extends Component {
     private onButton(btn: HudButton) {
         const core = this.core!;
         switch (btn) {
-        case 'mute':
-            this.audio?.setMuted(this.hud!.toggleMute());
+        case 'mute': {
+            const m = this.hud!.toggleMute();
+            this.audio?.setMuted(m);
+            if (this.save) { this.save.data.settings.muted = m; this.persist(); }
             break;
+        }
         case 'start':
         case 'restart':
             this.startMode('endless');
