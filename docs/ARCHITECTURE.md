@@ -8,19 +8,19 @@
 
 | 任务书模块 | 落点 | 状态 | 说明 |
 |-----------|------|------|------|
-| Core | `core/`（GameCore 固定步长状态机、rng 独立子流、Reachability 可达规划、RunLedger、AdRewardCoordinator、types、Logger） | ✅ | 规则唯一真源；零 cc 依赖可单测 |
-| Runner | `core/GameCore.ts` 固定步长（60Hz）速度/跳跃/俯冲/变道/踉跄减速/暂停/连续几何 | ✅ | 暴露 `renderAlpha`/`interp*` 供渲染插值 |
+| Core | `core/`（`GameSession` 单局与成长协调器、`GameCore` 规则真源、`SimulationClock`、`CollisionSystem`、`rng` 独立子流、`Reachability`、`Replay`、`RunLedger`、`AdRewardCoordinator`、`types`、`Logger`） | ✅ | 零 cc 依赖，可独立单测与确定性回放 |
+| Runner | `core/GameCore.ts` + `core/SimulationClock.ts`（60Hz 固定步长/后台恢复/`renderAlpha` 插值） | ✅ | 暴露 `ReadonlyCoreView` 与 `CoreCommand` 队列 |
 | World | `core/track.ts`（SegmentPath 分段路径与 `isSafeSpawnRange` 区间校验）+ `core/MapGenerator.ts`（独立种子/单局覆写）+ `core/WorldShift.ts`（原点重定位） | ✅（90° 转弯/坡度/主题/特殊地块） | 统一 `toAbsD`/`toRelZ` 坐标转换 |
-| Input | `input/InputController.ts`（多点触控按 ID 隔离 / TOUCH_CANCEL / 阈值配置化） | ✅ | 意图归一化，不含玩法；核心支持 `onBeforeStep` 固定帧采样 |
+| Input | `input/InputController.ts`（多点触控按 ID 隔离 / TOUCH_CANCEL / 阈值配置化） | ✅ | 意图归一化，经 `CoreCommand` 提交核心 |
 | Camera | `render/Renderer3D.updateCamera`（跟随插值/跳跃高度跟随/速度 fov/震屏上限/穿模防护） | ✅ | 🅿️ 首人称/过场再抽 `camera/` |
-| Collision | `core/GameCore.updateRun` 连续扫描碰撞（`[currZ,prevZ]` 区间 + 角色宽度 + 跳跃/滑铲高度 + 滚石连续 `visLane`） | ✅ | 零 cc 物理依赖，防高速穿透 |
-| Gameplay | GameCore 事件系统 + 高温饮水 + 7 神通 + 无尽/征途双模式 + 教程单局覆写 | ✅ | 不修改共享配置，状态变化经接口与事件输出 |
-| Economy | `core/Economy.ts`（幂等事务日志）+ `core/RunLedger.ts`（累计差额金币/复活增量结算）+ `core/AdRewardCoordinator.ts` | ✅ | 防重放、防取整丢倍率、防迟到回调串局 |
+| Collision | `core/CollisionSystem.ts` 纯数学连续扫描碰撞（`[currZ,prevZ]` 区间 + 角色宽度 + 跳跃/滑铲高度 + 滚石连续 `visLane` + 拾取扫描） | ✅ | 零 cc 物理依赖，与 Reachability 共享几何常量 |
+| Gameplay | `GameSession` + `GameCore` 事件系统 + 高温饮水 + 7 神通 + 无尽/征途双模式 + 教程单局覆写 | ✅ | 共享配置经 `ConfigRegistry.deepFreeze` 冻结，状态变化经命令与事件输出 |
+| Economy | `core/GameSession.ts` + `core/Economy.ts` + `core/RunLedger.ts` + `core/AdRewardCoordinator.ts`（单次消费票据 `ticketId`） | ✅ | 防重放、防取整丢倍率、防迟到回调串局、防重复领奖 |
 | Save | `platform/Save.ts`（v2 校验和 + 备份槽 + 字段范围清洗 + 高版本写锁 + 损坏隔离 + 异常捕获） | ✅ | 禁止静默丢弃高版本或正常进度 |
-| Platform | `platform/AdService.ts`（mock/wx）、`platform/ErrorHooks.ts` | ✅ | 🅿️ P3 wx.share/P4 广告点位扩展 |
-| UI | `render/Hud2D.ts`（HUD/面板/弹字，按钮命中唯一持有） | ✅ | 🅿️ P2 设置/商店浮层（状态机栈模式） |
-| Audio | — | 🅿️ P2 | `audio/` AudioManager + 播放接口（静音开关已预留于 Hud2D） |
-| Assets | 配置即资产（`resources/game-config.json`）+ 程序化几何 | ✅（现状） | 🅿️ P2 美术/音频资产管线（分包，受 COMPLIANCE 包体约束） |
+| Platform | `platform/AdService.ts`（mock/wx）、`platform/ErrorHooks.ts` | ✅ | 🅿️ 真机流量主联调 |
+| UI | `render/Hud2D.ts`（HUD/面板/弹字，按钮命中唯一持有） | ✅ | 只读核心与会话状态，动作经回调交由 `GameSession` |
+| Audio | `audio/AudioMgr.ts`（BGM/环境音/8 实例 SFX 池 + 静音持久化 + 完整销毁） | ✅ | 21 个程序化原创音频 |
+| Assets | `config/ConfigRegistry.ts`（跨配置校验+冻结）+ `render/RenderContracts.ts`（FBX/glTF 角色与模块化地块替换契约 + `ResourceTracker`） | ✅ | 商业级 3D 资产可零侵入接入，不改动核心玩法层 |
 
 依赖方向（箭头 = 允许依赖，禁止反向）：
 

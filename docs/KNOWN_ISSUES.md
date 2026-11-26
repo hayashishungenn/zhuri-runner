@@ -29,3 +29,4 @@
 | 23 | 真机性能/触控/发热/音频/生命周期未验证（Phase 8） | 30/60 FPS 目标无设备证据 | Android 低/中/高 + iOS 人工实测，不得用浏览器结果替代 |
 | 24 | headless 横屏下逻辑坐标映射失效（竖屏设计常量），浏览器触控自动化未闭环 | 浏览器端触控测试不可用 | 真机验证；UI 命中已由 Node cc 桩测试覆盖 |
 | 25 | 默认静音为测试期临时配置（`Save.settings.muted=true`） | 正式发布若忘改则新玩家无声 | 接入正式广告/发布前改回 `false`（玩家手动静音仍持久化） |
+| 26 | 早期 `ProceduralKuafu.update()` 将 `root.position.z` 归零并覆盖斜坡/断桥 `r.y`；`Renderer3D.destroy()` 未释放缓存材质与对象池节点；`AudioMgr` 含冗余 `sfxSource` 且 `destroy()` 未重置 `loaded` | 地形高低表现失真；场景重建时资源泄漏 | ✅ P8.2 已全部修复（见 `PHASE8_2_REPORT.md`） |

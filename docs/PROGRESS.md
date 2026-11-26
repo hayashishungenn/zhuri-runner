@@ -89,7 +89,18 @@
 - [x] 教程单局模式参数覆写 `RunModeOverrides`/`MapRunOverrides`（不修改共享配置且与 `MapGenerator` 一致）
 - [x] 存档安全加固（全字段范围清洗、高版本写锁防静默覆盖、双档损坏隔离、存储异常安全降级）
 - [x] 验证：type-check 0 错、lint 0 错、246/246 单测与全层级（Tier 0/1/2 + 移动障碍）1000 种子零无敌重放全绿、独立对抗审查复验通过、Cocos 3.8.8 微信构建 0 Missing class
-- 报告：`docs/PHASE8_1_REPORT.md`；**本阶段已停止，等待独立审查验收后再进入后续美术与手感阶段**
+- 报告：`docs/PHASE8_1_REPORT.md`（已独立审查验收并通过）
+
+## P8.2 — 核心架构重构与工程质量提升 ✅（代码、测试与构建完成，等待独立审查验收）
+
+- [x] 全量架构审计：识别并修复 `Game.ts` 业务膨胀、`ProceduralKuafu` 覆盖 Z/斜坡 Y、`Renderer3D.destroy()` 材质与对象池节点泄漏、`AudioMgr` 冗余组件与未重置状态、`AdRewardCoordinator` 票据单次消费锁缺失
+- [x] 单局生命周期与成长协调器：`core/GameSession.ts`（零 `cc` 依赖，统一管理 `title → running ⇄ paused → dying → awaitRevive → settled | journeyCleared` 状态机及经济/任务/成就/皮肤/强化/广告/存档事务）
+- [x] 核心职责务实拆分：`core/SimulationClock.ts`、`core/CollisionSystem.ts`，并补齐 `CoreCommand`、`ReadonlyCoreView`、`CoreResourceStats` 与带 `runId`/`tick` 的 `CoreEvent`
+- [x] 确定性回放与最小复现导出：`core/Replay.ts`（`ReplayRecorder`、`replayRun`、`exportMinimalRepro`）
+- [x] 统一配置校验与只读冻结：`config/ConfigRegistry.ts`（`validateAllConfigs` + `deepFreeze`）+ `SkinCatalog.SKIN_COSTS` 单一数据源
+- [x] 商业级 3D 美术资产替换契约与资源监控：`render/RenderContracts.ts`（`CharacterAssetProvider`、`SceneAssetBinder`、`RenderResourceStats`、`ResourceTracker`）+ `Renderer3D.getResourceStats()`
+- [x] 验证：type-check 0 错、lint 0 错、**263/263 单测全绿**（18 个测试文件，新增 `tests/phase8-2-arch.spec.ts` 17 项）、Cocos 3.8.8 微信构建成功（exit=36，0 Missing class，`main/index.js` 442KB）
+- 报告：`docs/PHASE8_2_REPORT.md`；**本阶段已停止，等待独立审查验收后再进入后续美术生产阶段**
 
 ## 人工验证项（待用户）
 

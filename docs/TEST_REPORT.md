@@ -158,6 +158,20 @@
 
 - 缺陷最小复现与回归 11 项（修复前 11/11 全部复现失败，修复后 11/11 全绿）：20 FPS 时间丢失、`maxDz` 坐标误传、同距离可达性未合并、高速冲刺拾取穿透、错过转弯同帧继续推进、复活后旧路口阻塞/再死、同种子重置不完整、金币倍率逐枚取整丢失、`coolRuns` 误判、教程覆写污染共享配置、存档越界/高版本覆盖/存储异常。
 - 跨帧率确定性 3 项：**20 / 30 / 60 / 120 FPS** 固定逻辑帧脚本状态**完全位等价**；不规则帧时间（8ms~67ms 抖动）与 60 FPS 位等价；5s 后台卡顿与 `onBackgroundResume()` 保护。
+
+### Phase 8.2（核心架构重构与工程质量提升，2026-11-26）
+
+`npm test` → **263/263 通过**（18 个测试文件，新增 `tests/phase8-2-arch.spec.ts` 17 项架构与工程质量回归）：
+
+- `SimulationClock` 3 项：60Hz 累加与 `renderAlpha`、大帧间隔 `MAX_SUB_STEPS` 限流与 `onBackgroundResume()`、暂停冻结与恢复清零。
+- `CollisionSystem` 4 项：高速连续 Z 扫掠、跳跃/滑铲高度净空、横向角色宽度与连续滚石 `continuousLane`、连续拾取扫掠。
+- `GameSession` 3 项：完整单局生命周期状态机（含暂停/死亡演出/广告复活/二次死亡幂等结算/返回标题）、广告票据防迟到回调与防重复消费（并在测试中捕获修复 `AdRewardCoordinator` `timedPower`/`skinTrial` 单次消费锁缺陷）、皮肤购买装备切换与强化原子落盘。
+- 命令与事件契约 1 项：`CoreCommand` 固定逻辑帧消费、`CoreEvent` `runId`/`tick` 单调性、`ReadonlyCoreView` 只读投影。
+- `Replay` 1 项：同种子与命令流确定性重放位等价、`exportMinimalRepro` JSON 往返复现。
+- `ConfigRegistry` 3 项：项目真实 4 份 JSON 全量通过跨配置校验、非法配置精确报错、`deepFreeze` 运行期写保护。
+- `RenderContracts` 与资源有界性 2 项：无核心改动替换 mock glTF `CharacterAssetProvider` 与 `SceneAssetBinder` + `ResourceTracker` 销毁归零断言；连续 50 次重复开局核心实体/路径/命令/事件队列严格有界。
+
+回归：`npm run type-check` 0 错误；`npm run lint` 0 错误；Cocos Creator 3.8.8 微信构建成功（exit=36，耗时 4s，`Missing class = 0`，`build/wechatgame/assets/main/index.js` 442KB，全部 Phase 8.2 运行时模块入包验证通过）。
 - 独立随机流 1 项：装饰 `propInterval` 变更对障碍/掉落流零扰动。
 - 连续运动、碰撞与可达边界 6 项：角色宽度中点擦边、相邻车道安全、连续滚石 `visLane`、滑铲身高净空、无敌期不误耗桃木神杖、`Reachability` 跨槽变道 `laneReady <= slot.d` 守卫。
 - **1000 种子真实可达性重放**（零无敌、开启碰撞、分段覆盖 Tier 0/1/2 + 满速 + 全 22 种障碍 + 90° 转弯）：`deaths=0 / 1000 seeds`，`tiers=[0,1,2]`，`moving=[moverGuard,roller,swingLog]`，`multiLane=397657`，`turns=3898`，`plans=574658`。
