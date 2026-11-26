@@ -54,10 +54,32 @@ export interface CoreEvent {
     lane?: number;
     /** item 事件：道具种类 */
     kind?: string;
-    /** cool 事件：降温量 */
+    /** cool 事件：降温量；fragment 事件：实际获得枚数（1 或 2） */
     amount?: number;
     /** stage 事件：阶段文案 */
     label?: string;
+}
+
+/** 单局模式参数覆写（例如教程稀疏生成），不修改共享 GameConfig */
+export interface RunModeOverrides {
+    spawnRowInterval?: number;
+    turnsEnabled?: boolean;
+    turnGapMin?: number;
+    turnGapMax?: number;
+}
+
+/** 开局附加神通（如广告限时神通），在 reset 之后注入核心 */
+export interface StartRunBuffs {
+    magnetT?: number;
+    dashT?: number;
+}
+
+/** startRun 可选参数 */
+export interface StartRunOptions {
+    seed?: number;
+    mode?: 'endless' | 'journey';
+    overrides?: RunModeOverrides | null;
+    startBuffs?: StartRunBuffs | null;
 }
 
 /** 输入意图（由输入层产生，核心层消费） */

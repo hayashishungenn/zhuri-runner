@@ -58,6 +58,13 @@ interface GenCursor {
     d: number;
 }
 
+/** 单局地图参数覆写（不修改基础配置，重开或退出教程自动还原） */
+export interface MapRunOverrides {
+    turnsEnabled?: boolean;
+    turnGapMin?: number;
+    turnGapMax?: number;
+}
+
 export class MapGenerator {
     readonly path: SegmentPath;
     readonly corners: Corner[] = [];
@@ -67,6 +74,7 @@ export class MapGenerator {
     tileIds: { id: string; kind: string; theme: number }[] = [];
     /** 难度 [0,1]：转弯间隔上限随难度向 gapMin+20 收缩 */
     difficulty = 0;
+    private readonly baseCfg: MapGenCfg;
     private cfg: MapGenCfg;
     private rng: SeededRng;
     private cur: GenCursor;
@@ -78,18 +86,37 @@ export class MapGenerator {
     private lastSlopeUp = false;
 
     constructor(cfg: MapGenCfg) {
-        this.cfg = cfg;
-        this.rng = new SeededRng(cfg.seed);
+        this.baseCfg = { ...cfg };
+        this.cfg = { ...cfg };
+        this.rng = new SeededRng(this.cfg.seed);
         this.path = new SegmentPath();
         this.cur = { x: 0, y: 0, z: 0, heading: 0, d: 0 };
     }
 
-    /** 重开时以同种子重建路径（可复现） */
-    reset(): void {
-        this.rng = new SeededRng(this.cfg.seed);
+    /** 当前生效配置（只读，供测试与诊断验证覆写一致性） */
+    get activeCfg(): Readonly<MapGenCfg> { return this.cfg; }
+
+    /** 设置或清除单局参数覆写（不改写 baseCfg） */
+    setOverrides(overrides: MapRunOverrides | null): void {
+        if (!overrides) {
+            this.cfg = { ...this.baseCfg };
+            return;
+        }
+        this.cfg = {
+            ...this.baseCfg,
+            ...(overrides.turnsEnabled !== undefined ? { turnsEnabled: overrides.turnsEnabled } : {}),
+            ...(overrides.turnGapMin !== undefined ? { turnGapMin: overrides.turnGapMin } : {}),
+            ...(overrides.turnGapMax !== undefined ? { turnGapMax: overrides.turnGapMax } : {}),
+        };
+    }
+
+    /** 重开时以指定种子（或配置默认种子）重建路径并重置全部运行态 */
+    reset(seed?: number): void {
+        this.rng = new SeededRng(seed ?? this.cfg.seed);
         this.path.clear();
         this.corners.length = 0;
         this.cur = { x: 0, y: 0, z: 0, heading: 0, d: 0 };
+        this.difficulty = 0;
         this.theme = 0;
         this.themeStartD = 0;
         this.sinceTurnD = 0;

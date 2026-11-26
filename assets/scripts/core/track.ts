@@ -157,13 +157,36 @@ export class SegmentPath {
     }
 
     /**
-     * 障碍/碎片安全生成区：d 及前后 margin 所在地块均允许生成（弯道/特殊地块自动排除）。
-     * 弧线段 allowsObstacles=false，margin 检查同时排除弯道入口近旁。
+     * 障碍/碎片安全生成区：d 及前后 margin 覆盖的全部地块均允许生成（弯道/特殊地块自动排除）。
      */
     isSafeSpawnZone(d: number, margin: number): boolean {
-        return this.segmentAt(d - margin).allowsObstacles
-            && this.segmentAt(d).allowsObstacles
-            && this.segmentAt(d + margin).allowsObstacles;
+        return this.isSafeSpawnRange(d, d, margin, 'obstacles');
+    }
+
+    /**
+     * 区间安全生成检查：[min(startD,endD)-margin, max(startD,endD)+margin] 覆盖的全部地块
+     * 必须满足对应生成许可（obstacles / props），避免跨段漏检短弯道或过渡地块。
+     */
+    isSafeSpawnRange(startD: number, endD: number, margin: number, kind: 'obstacles' | 'props' = 'obstacles'): boolean {
+        const segs = this.segments;
+        if (!segs.length) return false;
+        const lo = Math.min(startD, endD) - margin;
+        const hi = Math.max(startD, endD) + margin;
+        if (hi > this.totalD) return false;
+        // 定位首个与 [lo, hi] 相交的地块
+        const firstSeg = this.segmentAt(lo);
+        let idx = this.cacheIdx;
+        if (segs[idx] !== firstSeg) idx = segs.indexOf(firstSeg);
+        for (let i = Math.max(0, idx); i < segs.length; i++) {
+            const seg = segs[i];
+            if (seg.startD > hi) break;
+            const segEnd = seg.startD + seg.length;
+            if (segEnd >= lo) {
+                const ok = kind === 'obstacles' ? seg.allowsObstacles : seg.allowsProps;
+                if (!ok) return false;
+            }
+        }
+        return true;
     }
 }
 

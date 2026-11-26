@@ -2,33 +2,74 @@
  * GameCore —— 核心玩法状态机与全部规则（唯一规则真源）。
  * 纯 TypeScript，零 cc 依赖：可在 Node 单测，也可对接任意渲染器。
  *
- * 数值全部来自 GameConfig（P0 原型实测值），机制与 P0 逐行为等价移植。
- * 坐标约定：车道 lane ∈ {-1,0,1}（laneCount 可扩），z 轴向玩家递减：spawnZ 出现、0 为玩家、despawnZ 移除。
+ * Phase 8.1 核心架构约定：
+ * 1. 固定时间步长：FIXED_DT = 1/60s，累加器驱动，单帧上限 MAX_FRAME_DT = 0.25s，
+ *    单帧最大步数 MAX_SUB_STEPS = 8；暴露 renderAlpha 与上一逻辑帧快照供渲染插值。
+ * 2. 坐标语义统一：
+ *    - 绝对路径距离 absD = dist + relZ（地图/安全区/转弯路口/可达性统一使用 absD）
+ *    - 相对玩家距离 relZ = absD - dist（实体 z：spawnZ 出现、0 为玩家、despawnZ 回收）
+ *    - 提供 toAbsD / toRelZ 显式转换，禁止混用。
+ * 3. 连续运动与扫描碰撞：基于 [prevZ, currZ] 区间与角色宽度/跳跃高度/滑铲高度做连续判定，防高速穿透。
+ * 4. 独立随机流：单局主种子 runSeed 派生 map / obstacle / drop / decor 4 条独立 PRNG 流。
+ * 5. 单局模式参数：通过 RunModeOverrides 注入，绝不修改共享 GameConfig。
  */
-import { GameConfig } from '../config/GameConfigSchema';
+import { GameConfig, ThemeCfg } from '../config/GameConfigSchema';
 import { ObstacleCatalog, ObstacleDef, defaultCatalog } from '../config/ObstacleCatalog';
-import { validateReachability, abilityForSpeed } from './Reachability';
-import { SystemRng, Rng } from './rng';
-import { Obstacle, ItemKind, ItemEntity, Fragment, Prop, GameState, CoreEvent } from './types';
-import { ThemeCfg } from '../config/GameConfigSchema';
+import { validateReachability, abilityForSpeed, ObstacleEvent } from './Reachability';
+import { Rng, SeededRng, RNG_STREAM, deriveSeed } from './rng';
+import {
+    Obstacle, ItemKind, ItemEntity, Fragment, Prop, GameState, CoreEvent,
+    RunModeOverrides, StartRunOptions,
+} from './types';
 import { MapGenerator, Corner } from './MapGenerator';
 
 export class GameCore {
+    /** 固定逻辑步长（60 Hz） */
+    static readonly FIXED_DT = 1 / 60;
+    /** 单帧输入 dt 上限（后台恢复/卡顿防护，防时间螺旋） */
+    static readonly MAX_FRAME_DT = 0.25;
+    /** 单次 update 最大逻辑子步数 */
+    static readonly MAX_SUB_STEPS = 8;
+
+    /** 连续碰撞几何常量（车道单位：相邻车道中心间距 = 1.0） */
+    static readonly PLAYER_HALF_WIDTH = 0.22;
+    static readonly OBS_HALF_WIDTH = 0.30;
+    static readonly PICKUP_HALF_WIDTH = 0.55;
+    static readonly PLAYER_STAND_HEIGHT = 1.8;
+    static readonly PLAYER_SLIDE_HEIGHT = 0.75;
+    static readonly JUMP_HEIGHT_BASE = 2.0;
+    static readonly JUMP_HEIGHT_LEAP = 2.5;
+    static readonly OBS_HIT_Z_BACK = -0.35;
+    /** 跳跃安全净空高度（与 jumpSafeFrom=0.12 / jumpSafeTo=0.88 高度 sin(0.12π)*2 ≈ 0.736 对齐） */
+    static readonly JUMP_CLEAR_HEIGHT = 0.73;
+
     readonly cfg: GameConfig;
+
+    // ---- 固定时间步与插值状态 ----
+    fixedTick = 0;
+    private simAccumulator = 0;
+    /** 渲染插值因子 [0, 1) */
+    renderAlpha = 0;
+    prevDist = 0;
+    prevPlayerLaneF = 0;
+    prevJumpT = -1;
+    /** 可选逻辑帧前采样钩子（用于确定性回放或固定步长输入消费） */
+    onBeforeStep: ((core: GameCore) => void) | null = null;
 
     // ---- 运行时状态（渲染器只读） ----
     state: GameState = 'title';
-    gTime = 0;              // 全局时钟（贯穿标题/死亡，驱动天色与虚线动画）
+    gTime = 0;              // 全局逻辑时钟（贯穿标题/死亡，驱动天色与虚线动画）
+    runTime = 0;            // 单局逻辑时钟（每次 startRun 归零，驱动 timing 障碍等单局规则，保证同种子完全可复现）
     timeScale = 1;          // 慢动作系数
-    dist = 0;               // 逻辑距离（里 = dist * liScale）
+    dist = 0;               // 逻辑距离（绝对路径位置，里 = dist * liScale）
     frags = 0;              // 阳炎计数
     speed: number;          // 速度公式值（不含踉跄减速）
     runPhase = 0;           // 跑步动画相位
-    playerLaneF = 0;        // 当前车道（浮点，缓动中）
+    playerLaneF = 0;        // 当前车道（浮点，连续缓动）
     targetLane = 0;
     jumpT = -1;             // [-1]未跳；[0,1)跳跃进度
     slideT = -1;            // [-1]未俯冲；[0,slideDuration]剩余时间
-    invincible = 0;         // 无敌剩余时间（复活/踉跄豁免共用）
+    invincible = 0;         // 无敌剩余时间（复活/踉跄豁免/冲刺共用）
     reviveUsed = false;
     milestone: number;
     dieTimer = -1;
@@ -45,16 +86,26 @@ export class GameCore {
     dashT = 0;              // 冲刺剩余（冲刺期间无敌）
     doubleT = 0;            // 倍率剩余
     shieldCharges = 0;      // 护盾层数（0/1）
-    staffCharges = 0;       // 桃木神杖层数（破坏切道/时机类障碍，0-6）
+    staffCharges = 0;       // 桃木神杖层数（破坏切道/时机类障碍，0-6+强化）
     leapT = 0;              // 巨人之跃剩余（跳跃更久更高）
     // ---- Phase 4 高温与逐日 ----
     heat = 0;               // 热量 [0,100]（100 不死：强制减速 maxSlow）
+    maxHeat = 0;            // 本局达到的最高热量（用于 coolRuns 成就精确判定）
     lastWaterD = 0;         // 上次饮水资源出现/拾取的里程（保底用）
     // ---- Phase 4 游戏模式与征途 ----
     mode: 'endless' | 'journey' = 'endless';
     journeyStage = 0;       // 已完成的征途阶段数
     // ---- Phase 6 强化效果（由 Game 装配时注入；0 = 无强化） ----
     mods = { staffCapBonus: 0, waterReduceBonus: 0, magnetBonus: 0, heatResist: 1, goldMul: 1 };
+
+    /** 单局主随机种子（用于可复现重放） */
+    runSeed: number;
+    private readonly baseSeed: number;
+    private obstacleRng!: Rng;
+    private dropRng!: Rng;
+    private decorRng!: Rng;
+    private runOverrides: RunModeOverrides | null = null;
+
     /** 当前主题索引（渲染/统计共用） */
     get themeIdx(): number { return this.path.segmentAt(this.dist).theme; }
     /** 当前难度 [0,1]（里程驱动，封顶） */
@@ -62,14 +113,17 @@ export class GameCore {
 
     private spawnAcc: number;
     private propAcc = 0;
-    private rng: Rng;
     private events: CoreEvent[] = [];
     private slowFactor = 1;     // 减速倍率（踉跄等触发）
     private slowTimer = 0;
-    private lastWaveEvents: { d: number; lanes: number[]; pass: 'jump' | 'slide' | 'lane' }[] = [];
-    /** 可达性验证统计（管线证据：validated 含与上一波合并的联合验证） */
+    private lastWaveEvents: ObstacleEvent[] = [];
+
+    /** 可达性验证统计 */
     readonly waveStats = { validated: 0, rejected: 0 };
-    readonly spawnDebug = { calls: 0, zoneBlocks: 0, patternSpawned: 0, fallbackSpawned: 0, fullRejects: 0, fragRows: 0, fragLanes: [] as number[], itemCount: 0, pityFires: 0 };
+    readonly spawnDebug = {
+        calls: 0, zoneBlocks: 0, patternSpawned: 0, fallbackSpawned: 0,
+        fullRejects: 0, fragRows: 0, fragLanes: [] as number[], itemCount: 0, pityFires: 0,
+    };
 
     // ---- Phase 2：无限地图与转弯 ----
     readonly mapGen: MapGenerator;
@@ -82,21 +136,60 @@ export class GameCore {
     readonly catalog: ObstacleCatalog;
     private defMap = new Map<string, ObstacleDef>();
 
-    constructor(cfg: GameConfig, rng?: Rng, opts?: { turnsEnabled?: boolean; catalog?: ObstacleCatalog; mode?: 'endless' | 'journey' }) {
+    constructor(
+        cfg: GameConfig,
+        rng?: Rng,
+        opts?: { turnsEnabled?: boolean; catalog?: ObstacleCatalog; mode?: 'endless' | 'journey'; seed?: number },
+    ) {
         this.cfg = cfg;
         if (opts?.mode) this.mode = opts.mode;
-        this.rng = rng ?? new SystemRng();
+        this.baseSeed = opts?.seed ?? (rng instanceof SeededRng ? rng.initialSeed : cfg.map.seed);
+        this.runSeed = this.baseSeed;
         this.speed = cfg.speed.base;
         this.milestone = cfg.milestone.step;
-        this.spawnAcc = cfg.spawn.rowInterval * 0.5;   // P0 初值 4 = 半个生成间隔
+        this.spawnAcc = cfg.spawn.rowInterval * 0.5;
         this.catalog = opts?.catalog ?? defaultCatalog();
         for (const d of this.catalog.obstacles) this.defMap.set(d.id, d);
-        // 地图生成：默认关闭转弯（旧测试语义不变）；3D 渲染模式由 Game 开启
         this.mapGen = new MapGenerator({
             ...cfg.map,
             turnsEnabled: opts?.turnsEnabled ?? false,
         });
+        this.initRngStreams(this.runSeed);
+        this.mapGen.reset(deriveSeed(this.runSeed, RNG_STREAM.MAP));
         this.mapGen.update(0);
+    }
+
+    /** 统一坐标转换：相对玩家距离 → 绝对路径距离 */
+    toAbsD(relZ: number): number { return this.dist + relZ; }
+    /** 统一坐标转换：绝对路径距离 → 相对玩家距离 */
+    toRelZ(absD: number): number { return absD - this.dist; }
+
+    /** 渲染插值位置（基于 renderAlpha） */
+    get interpDist(): number { return this.prevDist + (this.dist - this.prevDist) * this.renderAlpha; }
+    get interpPlayerLaneF(): number { return this.prevPlayerLaneF + (this.playerLaneF - this.prevPlayerLaneF) * this.renderAlpha; }
+    get interpJumpT(): number {
+        if (this.jumpT < 0 || this.prevJumpT < 0) return this.jumpT;
+        return this.prevJumpT + (this.jumpT - this.prevJumpT) * this.renderAlpha;
+    }
+
+    /** 玩家当前离地高度（连续） */
+    get playerY(): number { return this.jumpHeightAt(this.jumpT); }
+    /** 玩家当前身高（站立 1.8 / 滑铲 0.75） */
+    get playerHeight(): number { return this.slideT >= 0 ? GameCore.PLAYER_SLIDE_HEIGHT : GameCore.PLAYER_STAND_HEIGHT; }
+    /** 本局是否全程未触发过热警戒 */
+    get isCoolRun(): boolean { return this.maxHeat < this.cfg.heat.warnAt; }
+
+    private jumpHeightAt(jt: number): number {
+        if (jt < 0 || jt >= 1) return 0;
+        const peak = this.leapT > 0 ? GameCore.JUMP_HEIGHT_LEAP : GameCore.JUMP_HEIGHT_BASE;
+        return Math.sin(jt * Math.PI) * peak;
+    }
+
+    private initRngStreams(seed: number): void {
+        this.runSeed = seed >>> 0;
+        this.obstacleRng = new SeededRng(deriveSeed(this.runSeed, RNG_STREAM.OBSTACLE));
+        this.dropRng = new SeededRng(deriveSeed(this.runSeed, RNG_STREAM.DROP));
+        this.decorRng = new SeededRng(deriveSeed(this.runSeed, RNG_STREAM.DECOR));
     }
 
     private defOf(o: Obstacle): ObstacleDef {
@@ -105,18 +198,18 @@ export class GameCore {
         return d;
     }
 
-    /** 障碍当前占道（timing 障碍按相位计算，并回写 lane/visLane 供渲染/测试驱动） */
+    /** 障碍当前占道（timing 障碍按相位计算，并回写 lane/visLane 供渲染/碰撞同源） */
     obstacleLanes(o: Obstacle): number[] {
         const def = this.defOf(o);
         const clamp = (v: number) => Math.max(-1, Math.min(1, v));
         if (def.osc) {
             const half = def.osc.period / 2;
-            const idx = Math.floor((this.gTime + o.phase) / half) % 2;
+            const idx = Math.floor((this.runTime + o.phase) / half) % 2;
             o.lane = def.osc.lanes[idx];
             return this.expandLanes(o.lane, def.lanes);
         }
         if (def.rollSpeed) {
-            const pos = ((this.gTime * def.rollSpeed + o.phase) % 2.4) - 1.2;
+            const pos = ((this.runTime * def.rollSpeed + o.phase) % 2.4) - 1.2;
             o.visLane = clamp(pos);
             o.lane = clamp(Math.round(pos));
             return [o.lane];
@@ -136,7 +229,7 @@ export class GameCore {
             if (!out.includes(r)) out.push(r);
             else break;
         }
-        return out.sort();
+        return out.sort((a, b) => a - b);
     }
 
     get laneMax(): number { return Math.floor(this.cfg.world.laneCount / 2); }
@@ -183,9 +276,39 @@ export class GameCore {
         return out;
     }
 
+    /** 设置或清除单局模式参数（例如教程完成时立即恢复正常生成，不修改共享 cfg） */
+    setRunOverrides(overrides: RunModeOverrides | null): void {
+        this.runOverrides = overrides ? { ...overrides } : null;
+        this.mapGen.setOverrides(this.runOverrides ? {
+            turnsEnabled: this.runOverrides.turnsEnabled,
+            turnGapMin: this.runOverrides.turnGapMin,
+            turnGapMax: this.runOverrides.turnGapMax,
+        } : null);
+    }
+
+    /** 当前生效的单局覆写（只读） */
+    get activeOverrides(): Readonly<RunModeOverrides> | null { return this.runOverrides; }
+
+    /** 后台恢复时清空未消费的帧时间累加器，防止切回前台瞬间爆发追帧 */
+    onBackgroundResume(): void {
+        this.simAccumulator = 0;
+        this.renderAlpha = 0;
+    }
+
     // ---------- 流程 ----------
-    startRun() {
-        this.reset();
+    startRun(opts?: StartRunOptions) {
+        if (opts?.mode) this.mode = opts.mode;
+        this.setRunOverrides(opts?.overrides ?? null);
+        this.reset(opts?.seed);
+        if (opts?.startBuffs) {
+            if (opts.startBuffs.magnetT && opts.startBuffs.magnetT > 0) {
+                this.magnetT = Math.max(this.magnetT, opts.startBuffs.magnetT);
+            }
+            if (opts.startBuffs.dashT && opts.startBuffs.dashT > 0) {
+                this.dashT = Math.max(this.dashT, opts.startBuffs.dashT);
+                this.invincible = Math.max(this.invincible, this.dashT);
+            }
+        }
         this.state = 'run';
     }
 
@@ -195,7 +318,10 @@ export class GameCore {
     }
 
     resume() {
-        this.paused = false;
+        if (this.state === 'run') {
+            this.paused = false;
+            this.simAccumulator = 0;
+        }
     }
 
     /**
@@ -212,8 +338,7 @@ export class GameCore {
 
     /**
      * 路口转向（Phase 2）。仅在转弯窗口内有效：
-     * 方向正确 → 通过路口；方向错误 → 立即撞墙死亡。
-     * @returns 是否成功转向
+     * 方向正确 → 通过路口；方向错误 → 标记路口已消费并撞墙死亡（复活后不会因旧窗口再次死亡）。
      */
     tryTurn(dir: 1 | -1): boolean {
         if (this.state !== 'run' || this.paused || !this.turnWindow) return false;
@@ -225,7 +350,9 @@ export class GameCore {
             this.turnWindow = null;
             return true;
         }
-        // 转错方向：冲出跑道
+        // 转错方向：标记该路口已结束，清空窗口，冲出跑道
+        if (c) c.passed = true;
+        this.turnWindow = null;
         this.events.push({ type: 'turnMiss' });
         this.crash();
         return false;
@@ -241,21 +368,37 @@ export class GameCore {
         this.reviveUsed = true;
         // 清除近处障碍（z <= reviveKeepZ），保留远景
         this.obstacles = this.obstacles.filter((o) => o.z > this.cfg.player.reviveKeepZ);
+        // 清理已过或位于复活保护区内的路口，避免旧路口阻塞或复活瞬间再次撞墙
+        const safeCornerD = this.dist + this.cfg.player.reviveKeepZ;
+        for (const c of this.mapGen.corners) {
+            if (c.d <= safeCornerD) c.passed = true;
+        }
+        this.turnWindow = null;
         this.invincible = this.cfg.player.reviveInvincible;
         this.stumbleTimer = 0;
         this.slowTimer = 0; this.slowFactor = 1;
+        this.jumpT = -1; this.slideT = -1;
+        this.dieTimer = -1;
+        this.simAccumulator = 0;
         this.state = 'run';
         this.timeScale = 1;
         return true;
     }
 
-    private reset() {
+    private reset(seed?: number) {
         const c = this.cfg;
+        this.fixedTick = 0;
+        this.simAccumulator = 0;
+        this.renderAlpha = 0;
+        this.runTime = 0;
         this.playerLaneF = 0; this.targetLane = 0;
+        this.prevDist = 0; this.prevPlayerLaneF = 0; this.prevJumpT = -1;
         this.jumpT = -1; this.slideT = -1; this.runPhase = 0;
         this.dist = 0; this.frags = 0; this.speed = c.speed.base;
         this.obstacles = []; this.fragments = []; this.props = [];
-        this.spawnAcc = c.spawn.rowInterval * 0.5; this.propAcc = 0;
+        const baseInterval = this.runOverrides?.spawnRowInterval ?? c.spawn.rowInterval;
+        this.spawnAcc = baseInterval * 0.5;
+        this.propAcc = 0;
         this.dieTimer = -1;
         this.reviveUsed = false; this.invincible = 0;
         this.milestone = c.milestone.step; this.timeScale = 1;
@@ -265,23 +408,35 @@ export class GameCore {
         this.items = [];
         this.magnetT = 0; this.dashT = 0; this.doubleT = 0; this.shieldCharges = 0;
         this.staffCharges = 0; this.leapT = 0;
-        this.heat = 0; this.lastWaterD = 0;
+        this.heat = 0; this.maxHeat = 0; this.lastWaterD = 0;
         this.journeyStage = 0;
         this.lastWaveEvents = [];
-        // 无限地图：同种子重建（可复现）
-        this.mapGen.reset();
+        this.events = [];
+        this.waveStats.validated = 0;
+        this.waveStats.rejected = 0;
+        this.spawnDebug.calls = 0;
+        this.spawnDebug.zoneBlocks = 0;
+        this.spawnDebug.patternSpawned = 0;
+        this.spawnDebug.fallbackSpawned = 0;
+        this.spawnDebug.fullRejects = 0;
+        this.spawnDebug.fragRows = 0;
+        this.spawnDebug.fragLanes = [];
+        this.spawnDebug.itemCount = 0;
+        this.spawnDebug.pityFires = 0;
+        // 主种子派生 4 条独立随机流并重建无限地图（含 difficulty 归零）
+        this.initRngStreams(seed ?? this.baseSeed);
+        this.mapGen.reset(deriveSeed(this.runSeed, RNG_STREAM.MAP));
         this.mapGen.update(0);
         this.turnWindow = null;
         this.cornersPassed = 0;
     }
 
     // ---------- 输入意图 ----------
-    // 动作优先级（Phase 1 规则化，详见 GAME_DESIGN）：
-    //   dying/dead/paused/title：不受理任何玩法输入
+    // 动作优先级（Phase 1 规则化）：
+    //   dying/dead/ended/paused/title：不受理任何玩法输入
     //   run：变道 ✓ 跳 ✓（仅地面、无二段跳）滑铲 ✓
     //   空中：变道 ✓ 滑铲 ✓（俯冲斩断跳跃）跳 ✗
     //   滑铲中：变道 ✓ 跳 ✓（起跳取消滑铲）滑铲 ✓（重置时长）
-    //   踉跄：作为 run 的修正器存在，全部输入照常受理（受豁免无敌保护）
     doLane(dir: number) {
         if (this.state !== 'run' || this.paused) return;
         this.targetLane = Math.max(-this.laneMax, Math.min(this.laneMax, this.targetLane + dir));
@@ -296,22 +451,49 @@ export class GameCore {
     }
     doSlide() {
         if (this.state !== 'run' || this.paused) return;
-        // 空中俯冲：斩断跳跃，快速落地
         if (this.jumpT >= 0) this.jumpT = this.cfg.player.diveJumpTo;
         const wasSliding = this.slideT >= 0;
         this.slideT = this.cfg.player.slideDuration;
         if (!wasSliding) this.events.push({ type: 'slideStart' });
     }
 
-    // ---------- 主循环 ----------
+    // ---------- 固定时间步长主循环 ----------
     update(dtRaw: number) {
-        if (this.paused) return;               // 暂停：整帧冻结（含 gTime）
-        const dt = Math.min(dtRaw, 0.033);
+        if (this.paused) return;
+        if (!Number.isFinite(dtRaw) || dtRaw <= 0) return;
+        const clamped = Math.min(dtRaw, GameCore.MAX_FRAME_DT);
+        this.simAccumulator += clamped;
+
+        const STEP = GameCore.FIXED_DT;
+        const EPS = 1e-9;
+        let steps = 0;
+        while (this.simAccumulator + EPS >= STEP && steps < GameCore.MAX_SUB_STEPS) {
+            this.simAccumulator = Math.max(0, this.simAccumulator - STEP);
+            this.stepFixed(STEP);
+            steps++;
+            if (this.paused) break;
+        }
+        if (steps === GameCore.MAX_SUB_STEPS && this.simAccumulator > STEP) {
+            this.simAccumulator = STEP * 0.999;
+        }
+        this.renderAlpha = Math.max(0, Math.min(1, this.simAccumulator / STEP));
+    }
+
+    /** 单次固定逻辑步推进（确定性核心） */
+    private stepFixed(dt: number) {
+        if (this.onBeforeStep) this.onBeforeStep(this);
+        this.prevDist = this.dist;
+        this.prevPlayerLaneF = this.playerLaneF;
+        this.prevJumpT = this.jumpT;
+
+        this.fixedTick++;
         this.gTime += dt;
         if (this.state === 'run') {
+            this.runTime += dt * this.timeScale;
             this.updateRun(dt * this.timeScale);
-            // updateRun 内可能 crash() → 'dying'，此时恢复由 updateDying 分支负责
-            if ((this.state as GameState) !== 'dying') this.recoverTimeScale(dt, this.cfg.death.ambientRecover);
+            if ((this.state as GameState) !== 'dying') {
+                this.recoverTimeScale(dt, this.cfg.death.ambientRecover);
+            }
         } else if (this.state === 'dying') {
             this.updateDying(dt * this.timeScale);
         } else {
@@ -327,30 +509,53 @@ export class GameCore {
         const c = this.cfg;
         this.speed = c.speed.base + Math.min(this.dist * c.speed.gain, c.speed.gainCap);
         const spd = this.effectiveSpeed;
+
         // 无限地图：前方预生成 / 身后回收；转弯窗口状态更新
         this.mapGen.update(this.dist);
         this.updateTurnWindow();
-        // 踉跄/减速/道具计时（浮点残差防护：< 1e-9 归零，避免永久生效）
-        if (this.stumbleTimer > 0) { this.stumbleTimer = Math.max(0, this.stumbleTimer - dt); if (this.stumbleTimer < 1e-9) this.stumbleTimer = 0; }
+        // 若错过转弯已触发死亡，立即中止本帧后续玩法逻辑（防止同帧推进距离或触发通关）
+        if ((this.state as GameState) !== 'run') return;
+
+        // 踉跄/减速/道具计时（浮点残差防护）
+        if (this.stumbleTimer > 0) {
+            this.stumbleTimer = Math.max(0, this.stumbleTimer - dt);
+            if (this.stumbleTimer < 1e-9) this.stumbleTimer = 0;
+        }
         if (this.slowTimer > 0) {
             this.slowTimer = Math.max(0, this.slowTimer - dt);
             if (this.slowTimer < 1e-9) { this.slowTimer = 0; this.slowFactor = 1; }
         }
-        if (this.magnetT > 0) { this.magnetT = Math.max(0, this.magnetT - dt); if (this.magnetT < 1e-9) this.magnetT = 0; }
-        if (this.doubleT > 0) { this.doubleT = Math.max(0, this.doubleT - dt); if (this.doubleT < 1e-9) this.doubleT = 0; }
-        if (this.leapT > 0) { this.leapT = Math.max(0, this.leapT - dt); if (this.leapT < 1e-9) this.leapT = 0; }
+        if (this.magnetT > 0) {
+            this.magnetT = Math.max(0, this.magnetT - dt);
+            if (this.magnetT < 1e-9) this.magnetT = 0;
+        }
+        if (this.doubleT > 0) {
+            this.doubleT = Math.max(0, this.doubleT - dt);
+            if (this.doubleT < 1e-9) this.doubleT = 0;
+        }
+        if (this.leapT > 0) {
+            this.leapT = Math.max(0, this.leapT - dt);
+            if (this.leapT < 1e-9) this.leapT = 0;
+        }
         if (this.dashT > 0) {
             this.dashT = Math.max(0, this.dashT - dt);
             if (this.dashT < 1e-9) this.dashT = 0;
-            this.invincible = Math.max(this.invincible, this.dashT);   // 冲刺期间无敌
+            this.invincible = Math.max(this.invincible, this.dashT);
         }
+
+        const prevLaneF = this.playerLaneF;
+        const prevJumpT = this.jumpT;
+        const prevSlideT = this.slideT;
+
         this.dist += spd * dt;
         // 高温：随难度与主题升温，封顶 100（永不致死——热满仅强制减速 maxSlow）
         if (this.heat < 100) {
             const themeMul = this.themeNow.heatMul;
             this.heat = Math.min(100, this.heat + c.heat.baseRate * themeMul * (1 + c.heat.dScale * this.difficulty) * this.mods.heatResist * dt);
         }
-        // 单帧跨越多个里程碑时必须逐次补发（原 if 会丢事件，成就/文案永久漏记）
+        if (this.heat > this.maxHeat) this.maxHeat = this.heat;
+
+        // 单帧跨越多个里程碑逐次补发
         while (this.li >= this.milestone) {
             this.events.push({ type: 'milestone', n: this.milestone });
             this.milestone += c.milestone.step;
@@ -364,12 +569,16 @@ export class GameCore {
                 this.events.push({ type: 'stage', n: this.journeyStage, label: st.label });
             }
             if (this.journeyStage >= stages.length) {
-                this.state = 'ended';                               // 通关：逐日功成
+                this.state = 'ended';
+                this.turnWindow = null;
                 this.events.push({ type: 'journeyDone' });
                 return;
             }
         }
-        if (this.invincible > 0) this.invincible -= dt;
+        if (this.invincible > 0) {
+            this.invincible = Math.max(0, this.invincible - dt);
+            if (this.invincible < 1e-9) this.invincible = 0;
+        }
         this.playerLaneF += (this.targetLane - this.playerLaneF) * Math.min(1, dt * c.player.laneLerp);
         if (this.jumpT >= 0) {
             this.jumpT += dt / this.jumpDurNow;
@@ -378,36 +587,67 @@ export class GameCore {
         if (this.slideT >= 0) { this.slideT -= dt; if (this.slideT < 0) this.slideT = -1; }
         this.runPhase += dt * (6 + spd * 0.35);
 
-        // 生成（动态密度：随难度收紧，但不低于反应时间下限）
-        // 安全区拦截时丢弃该波（特殊区/弯道附近自然稀疏，玩家无感）
+        // 生成（保留余数，避免跨帧率相位漂移）
         this.spawnAcc += spd * dt;
-        if (this.spawnAcc > this.rowIntervalNow()) { this.spawnAcc = 0; this.spawnWave(); }
+        const rowInt = this.rowIntervalNow();
+        while (this.spawnAcc >= rowInt) {
+            this.spawnAcc -= rowInt;
+            this.spawnWave();
+        }
         this.propAcc += spd * dt;
-        if (this.propAcc > c.spawn.propInterval) { this.propAcc = 0; this.spawnProp(); }
+        while (this.propAcc >= c.spawn.propInterval) {
+            this.propAcc -= c.spawn.propInterval;
+            this.spawnProp();
+        }
         // 地图生成难度联动（转弯频率随难度提升）
         this.mapGen.difficulty = this.difficulty;
 
-        // 障碍推进 + 判定（catalog 数据驱动）
+        // ---- 障碍推进 + 连续扫描碰撞判定 ----
+        const hitZFront = c.obstacle.hitZ;
+        const hitZBack = GameCore.OBS_HIT_Z_BACK;
+        const lateralThreshold = GameCore.PLAYER_HALF_WIDTH + GameCore.OBS_HALF_WIDTH;
+
         for (let i = this.obstacles.length - 1; i >= 0; i--) {
             const o = this.obstacles[i];
+            const prevZ = o.z;
             o.z -= spd * dt;
-            if (o.z < c.world.despawnZ) { this.obstacles.splice(i, 1); continue; }
-            // timing 障碍：逐帧更新占道（摆动切换/滚石横移），保证渲染与判定同源
-            if (this.defOf(o).pass === 'timing') this.obstacleLanes(o);
-            if (!o.passed && o.z < c.obstacle.hitZ) {
+            const currZ = o.z;
+            if (currZ < c.world.despawnZ) { this.obstacles.splice(i, 1); continue; }
+
+            const def = this.defOf(o);
+            if (def.pass === 'timing') this.obstacleLanes(o);
+
+            // 连续扫描区间 [currZ, prevZ] 与碰撞区间 [hitZBack, hitZFront] 相交
+            if (!o.passed && currZ <= hitZFront && prevZ >= hitZBack) {
                 o.passed = true;
-                const def = this.defOf(o);
+                // 计算穿过 hitZFront 的插值时刻 t ∈ [0, 1]
+                const dz = prevZ - currZ;
+                const t = dz > 1e-6 ? Math.max(0, Math.min(1, (prevZ - hitZFront) / dz)) : 1;
+                const laneAtT = prevLaneF + (this.playerLaneF - prevLaneF) * t;
+                const jumpAtT = (prevJumpT >= 0 && this.jumpT >= 0)
+                    ? prevJumpT + (this.jumpT - prevJumpT) * t
+                    : (this.jumpT >= 0 ? this.jumpT : prevJumpT);
+                const slideAtT = prevSlideT >= 0 || this.slideT >= 0;
+
                 const lanes = this.obstacleLanes(o);
-                const myLane = Math.round(this.playerLaneF);
-                const jumping = this.jumpT >= 0 && this.jumpT > c.player.jumpSafeFrom && this.jumpT < c.player.jumpSafeTo;
-                const sliding = this.slideT >= 0;
-                // 通行条件：timing 障碍中滚石按跳跃（时机跳跃）、摆动类按切道
+                const lateralHit = (def.rollSpeed && o.visLane !== undefined)
+                    ? Math.abs(laneAtT - o.visLane) < lateralThreshold
+                    : lanes.some((l) => Math.abs(laneAtT - l) < lateralThreshold);
+
+                const jumping = jumpAtT >= 0
+                    && jumpAtT > c.player.jumpSafeFrom
+                    && jumpAtT < c.player.jumpSafeTo
+                    && this.jumpHeightAt(jumpAtT) >= GameCore.JUMP_CLEAR_HEIGHT;
+                const sliding = slideAtT;
+
                 const effPass = def.pass === 'timing' ? (def.rollSpeed ? 'jump' : 'lane') : def.pass;
-                let safe = false;
-                if (!lanes.includes(myLane)) safe = true;
-                else if (effPass === 'jump') safe = jumping;
-                else if (effPass === 'slide') safe = sliding;
-                // 桃木神杖：撞上切道/时机类障碍时消耗 1 层将其击碎（跳跃/滑铲类不适用——那些本可动作通过）
+                let safe = !lateralHit;
+                if (lateralHit) {
+                    if (effPass === 'jump') safe = jumping;
+                    else if (effPass === 'slide') safe = sliding;
+                }
+
+                // 桃木神杖：撞上切道/时机类障碍时消耗 1 层将其击碎
                 if (!safe && this.staffCharges > 0 && (def.pass === 'lane' || def.pass === 'timing')) {
                     this.staffCharges--;
                     this.invincible = Math.max(this.invincible, 0.8);
@@ -416,7 +656,6 @@ export class GameCore {
                     continue;
                 }
                 if (!safe && this.invincible <= 0 && this.shieldCharges > 0) {
-                    // 护盾：抵挡一次任何撞击（含墙），击碎障碍 + 短无敌
                     this.shieldCharges--;
                     this.invincible = Math.max(this.invincible, 1.2);
                     o.z = -3;
@@ -424,23 +663,23 @@ export class GameCore {
                     continue;
                 }
                 if (!safe && this.invincible <= 0) {
-                    // 受击分级：踉跄类首撞 → 踉跄；踉跄中再撞或即死类 → 死亡
                     const canStumble = c.player.stumble.enabled && def.damage === 'stumble' && !this.stumbling;
                     if (canStumble) {
                         this.stumbleTimer = c.player.stumble.duration;
                         this.invincible = c.player.stumble.mercyInvincible;
                         this.applySlowdown(c.player.stumble.speedFactor, c.player.stumble.duration);
-                        o.z = -3;              // 击碎该障碍
+                        o.z = -3;
                         this.events.push({ type: 'stumble' });
                     } else {
                         this.crash();
                         return;
                     }
                 }
-                if (!safe && this.invincible > 0 && o.z !== -3) { o.z = -3; this.events.push({ type: 'obstacleSmashed' }); }
-                else if (safe && lanes.includes(myLane)) {
+                if (!safe && this.invincible > 0 && o.z !== -3) {
+                    o.z = -3;
+                    this.events.push({ type: 'obstacleSmashed' });
+                } else if (safe && lateralHit) {
                     this.events.push({ type: 'obstaclePassed' });
-                    // 清凉水花：安全越过溪流降温（策略性：溪流由威胁变为资源）
                     if (def.vis === 'water') {
                         this.heat = Math.max(0, this.heat - c.heat.streamReduce);
                         this.events.push({ type: 'cool', amount: c.heat.streamReduce });
@@ -448,58 +687,82 @@ export class GameCore {
                 }
             }
         }
-        // 道具拾取
+
+        // ---- 道具拾取（扫描区间防高速穿透）----
+        const pickFrom = c.obstacle.pickupZFrom;
+        const pickTo = c.obstacle.pickupZTo;
         for (let i = this.items.length - 1; i >= 0; i--) {
             const it = this.items[i];
+            const prevZ = it.z;
             it.z -= spd * dt;
-            if (it.z < c.world.despawnZ) { this.items.splice(i, 1); continue; }
-            if (!it.got && it.z < c.obstacle.pickupZTo && it.z > c.obstacle.pickupZFrom
-                && Math.round(this.playerLaneF) === it.lane) {
-                it.got = true;
-                this.pickItem(it.kind);
-                this.events.push({ type: 'item', kind: it.kind });
-                this.items.splice(i, 1);
+            const currZ = it.z;
+            if (currZ < c.world.despawnZ) { this.items.splice(i, 1); continue; }
+            if (!it.got && currZ <= pickTo && prevZ >= pickFrom) {
+                const dz = prevZ - currZ;
+                const midZ = (pickFrom + pickTo) * 0.5;
+                const t = dz > 1e-6 ? Math.max(0, Math.min(1, (prevZ - midZ) / dz)) : 1;
+                const laneAtT = prevLaneF + (this.playerLaneF - prevLaneF) * t;
+                if (Math.abs(laneAtT - it.lane) <= GameCore.PICKUP_HALF_WIDTH) {
+                    it.got = true;
+                    this.pickItem(it.kind);
+                    this.events.push({ type: 'item', kind: it.kind, lane: it.lane });
+                    this.items.splice(i, 1);
+                }
             }
         }
-        // 磁吸：近处碎片吸附到玩家车道
+
+        // ---- 磁吸：近处碎片吸附到玩家车道 ----
         if (this.magnetT > 0) {
+            const snapLane = Math.round(this.playerLaneF);
             for (const f of this.fragments) {
-                if (!f.got && f.z > 0 && f.z < 8) f.lane = Math.round(this.playerLaneF);
+                if (!f.got && f.z > 0 && f.z < 8) f.lane = snapLane;
             }
         }
-        // 阳炎拾取
+
+        // ---- 阳炎拾取（扫描区间防高速穿透）----
         for (let i = this.fragments.length - 1; i >= 0; i--) {
             const f = this.fragments[i];
+            const prevZ = f.z;
             f.z -= spd * dt;
-            if (f.z < c.world.despawnZ) { this.fragments.splice(i, 1); continue; }
-            if (!f.got && f.z < c.obstacle.pickupZTo && f.z > c.obstacle.pickupZFrom
-                && Math.round(this.playerLaneF) === f.lane) {
-                f.got = true;
-                this.frags += this.doubleT > 0 ? 2 : 1;
-                this.events.push({ type: 'fragment', lane: f.lane });
+            const currZ = f.z;
+            if (currZ < c.world.despawnZ) { this.fragments.splice(i, 1); continue; }
+            if (!f.got && currZ <= pickTo && prevZ >= pickFrom) {
+                const dz = prevZ - currZ;
+                const midZ = (pickFrom + pickTo) * 0.5;
+                const t = dz > 1e-6 ? Math.max(0, Math.min(1, (prevZ - midZ) / dz)) : 1;
+                const laneAtT = prevLaneF + (this.playerLaneF - prevLaneF) * t;
+                if (Math.abs(laneAtT - f.lane) <= GameCore.PICKUP_HALF_WIDTH) {
+                    f.got = true;
+                    const amount = this.doubleT > 0 ? 2 : 1;
+                    this.frags += amount;
+                    this.events.push({ type: 'fragment', lane: f.lane, amount });
+                }
             }
         }
+
         for (let i = this.props.length - 1; i >= 0; i--) {
             this.props[i].z -= spd * dt;
             if (this.props[i].z < c.world.despawnZ) this.props.splice(i, 1);
         }
     }
 
-    /** 转弯窗口状态机：进入窗口开启；越过路口未转向 → 撞墙（转弯失败） */
+    /** 转弯窗口状态机：进入窗口开启；越过路口未转向 → 标记路口已消费并撞墙 */
     private updateTurnWindow() {
-        const next = this.mapGen.corners.find((c) => !c.passed);
         const W = this.cfg.map.turnWindow;
         if (this.turnWindow) {
-            const passed = this.findCorner(this.turnWindow.d)?.passed;
-            if (passed) { this.turnWindow = null; return; }
+            const corner = this.findCorner(this.turnWindow.d);
+            if (corner?.passed) { this.turnWindow = null; return; }
             if (this.dist > this.turnWindow.d + 0.6) {
-                // 错过转弯：撞上路口墙体（无敌不豁免——墙是跑道本体）
-                this.events.push({ type: 'turnMiss' });
+                // 错过转弯：标记路口已结束，清空窗口，触发死亡（复活后不再被旧路口阻塞）
+                if (corner) corner.passed = true;
                 this.turnWindow = null;
+                this.events.push({ type: 'turnMiss' });
                 this.crash();
             }
             return;
         }
+        // 仅查找未通过且尚未完全越过的未来路口
+        const next = this.mapGen.corners.find((c) => !c.passed && c.d + 0.6 >= this.dist);
         if (next && this.dist >= next.d - W && this.dist <= next.d + 0.6) {
             this.turnWindow = { dir: next.dir, d: next.d };
         }
@@ -516,17 +779,20 @@ export class GameCore {
     }
 
     private crash() {
+        if (this.state !== 'run') return;
         this.state = 'dying';
+        this.turnWindow = null;
         this.dieTimer = this.cfg.death.dieDelay;
         this.timeScale = this.cfg.death.slowmo;
         this.events.push({ type: 'crash' });
     }
 
     // ---------- 生成 ----------
-    /** 动态生成间隔：随难度收紧，但不低于反应时间下限（速度×reactionGuard 与绝对下限取大） */
+    /** 动态生成间隔：随难度收紧，但不低于反应时间下限（支持单局教程覆写） */
     rowIntervalNow(): number {
         const d = this.cfg.difficulty;
-        const base = this.cfg.spawn.rowInterval * (1 - 0.55 * this.difficulty);
+        const baseInterval = this.runOverrides?.spawnRowInterval ?? this.cfg.spawn.rowInterval;
+        const base = baseInterval * (1 - 0.55 * this.difficulty);
         return Math.max(base, d.minInterval, this.effectiveSpeed * d.reactionGuard);
     }
 
@@ -535,9 +801,9 @@ export class GameCore {
         return Math.min(2, Math.floor(this.difficulty * 3));
     }
 
-    private weightedPick<T extends { weight: number }>(list: T[]): T {
+    private weightedPick<T extends { weight: number }>(list: T[], rng: Rng): T {
         const total = list.reduce((acc, x) => acc + x.weight, 0);
-        let r = this.rng.next() * total;
+        let r = rng.next() * total;
         for (const x of list) { r -= x.weight; if (r <= 0) return x; }
         return list[list.length - 1];
     }
@@ -546,143 +812,146 @@ export class GameCore {
         const c = this.catalog.spawn;
         const tier = this.maxTier();
         const pools = [c.randomPoolTier0, c.randomPoolTier1, c.randomPoolTier2];
-        // 从当前及以下层级合并抽样（高 tiers 权重随难度增大）
         const merged: string[] = [];
         for (let t = 0; t <= Math.min(tier, pools.length - 1); t++) {
             const w = t === tier ? 3 : t === tier - 1 ? 2 : 1;
             for (let i = 0; i < w; i++) merged.push(...pools[t]);
         }
         if (!merged.length) merged.push(...pools[0]);
-        // 过滤 unlockD
         const avail = merged.filter((id) => {
             const def = this.defMap.get(id);
             return !def?.unlockD || this.difficulty >= def.unlockD;
         });
         const pool = avail.length ? avail : merged;
-        return pool[Math.floor(this.rng.next() * pool.length)];
+        return pool[Math.floor(this.obstacleRng.next() * pool.length)];
+    }
+
+    /** 障碍事件占道并集（与碰撞/可达性同源） */
+    private threatLanesFor(def: ObstacleDef, anchorLane: number): number[] {
+        if (def.osc) return [...def.osc.lanes];
+        if (def.rollSpeed) return [-1, 0, 1];
+        return this.expandLanes(anchorLane, def.lanes);
     }
 
     /**
-     * 生成一波挑战：模板（组合）或随机单体；模板先经可达性验证（失败重掷，兜底单体）。
-     * 生成避让：整波 + 碎片带需落在允许生成的直线段。
+     * 生成一波挑战：模板（组合）或随机单体；全部经可达性验证并检查完整绝对坐标安全区。
+     * @returns 是否实际生成了波（false = 安全区拦截）
      */
-    /** @returns 是否实际生成了波（false = 安全区拦截，调用方丢弃该波） */
     private spawnWave(): boolean {
         const c = this.cfg;
         this.spawnDebug.calls++;
-        const front = this.dist + c.world.spawnZ;
-        const back = front + c.spawn.fragmentLead + c.spawn.fragmentCount * c.spawn.fragmentGap;
-        if (!this.mapGen.path.isSafeSpawnZone(front, 4) || !this.mapGen.path.isSafeSpawnZone(back, 2)) { this.spawnDebug.zoneBlocks++; return false; }
+        const frontAbsD = this.toAbsD(c.world.spawnZ);
+        if (!this.mapGen.path.isSafeSpawnRange(frontAbsD, frontAbsD, 6, 'obstacles')) {
+            this.spawnDebug.zoneBlocks++;
+            return false;
+        }
 
         const lanesFree: number[] = [];
         for (let l = -this.laneMax; l <= this.laneMax; l++) lanesFree.push(l);
-        const usedLanes: number[] = [];
-        const placed: { defId: string; lane: number; z: number }[] = [];
+        const usedLanes = new Set<number>();
 
-        // ---- 模板路径（可达性验证：与上一波合并验证跨波组合）----
+        // 保留全部仍在玩家前方的未通过障碍参与跨波可达性验证（避免漏检近身波对车道的约束）
+        const pruneD = this.toAbsD(c.obstacle.hitZ);
+        const upcoming = this.lastWaveEvents.filter((e) => e.d > pruneD);
+        // 使用玩家抵达本波最远步进时的预期速度（含加速增长、冲刺倍率与 12% 判定余量），避免生成时可达、抵达时因增速/帧量化不可达
+        const arrivalSpeed = c.speed.base + Math.min((frontAbsD + 20) * c.speed.gain, c.speed.gainCap);
+        const evalSpeed = Math.max(arrivalSpeed, this.effectiveSpeed) * 1.12;
+        const ability = abilityForSpeed(evalSpeed, {
+            laneLerp: c.player.laneLerp,
+            jumpDuration: c.player.jumpDuration,
+            slideDuration: c.player.slideDuration,
+            reactionTime: c.difficulty.reactionTime,
+        });
+        const reachInit = {
+            states: [{ lane: Math.round(this.targetLane), ready: this.dist }],
+        };
+
+        // ---- 模板路径 ----
         let spawned = false;
-        if (this.rng.next() < this.catalog.spawn.patternChance) {
+        if (this.obstacleRng.next() < this.catalog.spawn.patternChance) {
             const tier = this.maxTier();
             const pool = this.catalog.patterns.filter((p) => p.tier <= tier);
-            const ability = abilityForSpeed(this.speed, {
-                laneLerp: c.player.laneLerp,
-                jumpDuration: c.player.jumpDuration,
-                slideDuration: c.player.slideDuration,
-                reactionTime: c.difficulty.reactionTime,
-            });
             for (let attempt = 0; attempt < 3 && !spawned; attempt++) {
-                const pat = this.weightedPick(pool);
-                const anchor = lanesFree[Math.floor(this.rng.next() * lanesFree.length)];
+                const pat = this.weightedPick(pool, this.obstacleRng);
+                const anchor = lanesFree[Math.floor(this.obstacleRng.next() * lanesFree.length)];
                 const steps = pat.steps.map((st) => ({
                     defId: st.def === 'random' ? this.randomDefId() : st.def,
                     lane: Math.max(-1, Math.min(1, anchor + st.lane)),
                     z: c.world.spawnZ + st.dz,
                 }));
-                // 波跨度安全区：最远步进也必须落在允许生成的直线段（模板可能跨 18+ 单位）
-                const maxDz = Math.max(...steps.map((st) => st.z));
-                if (!this.mapGen.path.isSafeSpawnZone(maxDz, 4)) {
+                // 统一使用绝对坐标检查整波区间 [minAbsD, maxAbsD] 是否全程在安全地块内
+                const minAbsD = Math.min(...steps.map((st) => this.toAbsD(st.z)));
+                const maxAbsD = Math.max(...steps.map((st) => this.toAbsD(st.z)));
+                if (!this.mapGen.path.isSafeSpawnRange(minAbsD, maxAbsD, 6, 'obstacles')) {
                     this.spawnDebug.zoneBlocks++;
                     continue;
                 }
-                const newEvents = steps.map((st) => {
+                const newEvents: ObstacleEvent[] = steps.map((st) => {
                     const def = this.defMap.get(st.defId)!;
-                    // timing 障碍按"扫过车道并集"登记（摆动/滚石的实际威胁范围，保守最坏情形）
-                    let lanes: number[];
-                    if (def.osc) lanes = def.osc.lanes;
-                    else if (def.rollSpeed) lanes = [-1, 0, 1];
-                    else lanes = this.expandLanes(st.lane, def.lanes);
                     return {
-                        d: this.dist + st.z,
-                        lanes,
+                        d: this.toAbsD(st.z),
+                        lanes: this.threatLanesFor(def, st.lane),
                         pass: (def.pass === 'timing' ? (def.rollSpeed ? 'jump' : 'lane') : def.pass) as 'jump' | 'slide' | 'lane',
                     };
                 });
-                // 跨波合并验证：上一波尚在前方的障碍 + 本波
-                const reach = validateReachability([...this.lastWaveEvents, ...newEvents], ability);
+                const reach = validateReachability([...upcoming, ...newEvents], ability, reachInit);
                 this.waveStats.validated++;
                 if (reach.reachable) {
-                    for (const st of steps) {
-                        this.obstacles.push({ defId: st.defId, lane: st.lane, z: st.z, passed: false, phase: this.rng.next() * 10 });
-                        usedLanes.push(st.lane);
+                    for (let k = 0; k < steps.length; k++) {
+                        const st = steps[k];
+                        this.obstacles.push({
+                            defId: st.defId, lane: st.lane, z: st.z,
+                            passed: false, phase: this.obstacleRng.next() * 10,
+                        });
+                        for (const ul of newEvents[k].lanes) usedLanes.add(ul);
                     }
-                    placed.push(...steps);
-                    this.lastWaveEvents = [...this.lastWaveEvents, ...newEvents]
-                        .filter((e) => e.d > this.dist + c.world.spawnZ * 0.5);   // 剪除已判定区间
+                    this.lastWaveEvents = [...upcoming, ...newEvents];
                     spawned = true;
                     this.spawnDebug.patternSpawned++;
                 } else {
                     this.waveStats.rejected++;
                 }
-                void spawned;
             }
         }
-        // ---- 兜底：随机单体（模板被拒/未选中）——同样必须通过合并可达性验证 ----
+
+        // ---- 兜底：随机单体（同样必须通过跨波可达性验证） ----
         if (!spawned) {
-            const n = this.rng.next() < c.spawn.singleRowChance ? 1 : 2;
+            const n = this.obstacleRng.next() < c.spawn.singleRowChance ? 1 : 2;
             const free = [...lanesFree];
             const picks: number[] = [];
             for (let i = 0; i < n && free.length; i++) {
-                picks.push(free.splice(Math.floor(this.rng.next() * free.length), 1)[0]);
+                picks.push(free.splice(Math.floor(this.obstacleRng.next() * free.length), 1)[0]);
             }
-            const ability = abilityForSpeed(this.speed, {
-                laneLerp: c.player.laneLerp,
-                jumpDuration: c.player.jumpDuration,
-                slideDuration: c.player.slideDuration,
-                reactionTime: c.difficulty.reactionTime,
-            });
             const eventsFor = (lanes: number[]) => {
                 const defs = lanes.map(() => this.randomDefId());
-                const evs = lanes.map((l, _i) => {
-                    const def = this.defMap.get(defs[_i])!;
-                    let ln: number[];
-                    if (def.osc) ln = def.osc.lanes;
-                    else if (def.rollSpeed) ln = [-1, 0, 1];
-                    else ln = this.expandLanes(l, def.lanes);
+                const evs = lanes.map((l, idx) => {
+                    const def = this.defMap.get(defs[idx])!;
                     return {
-                        d: this.dist + c.world.spawnZ,
-                        lanes: ln,
+                        d: frontAbsD,
+                        lanes: this.threatLanesFor(def, l),
                         pass: (def.pass === 'timing' ? (def.rollSpeed ? 'jump' : 'lane') : def.pass) as 'jump' | 'slide' | 'lane',
-                        defId: defs[_i],
+                        defId: defs[idx],
                         lane: l,
                     };
                 });
                 return { evs };
             };
-            // 依次尝试 2 连、1 个；每次与上一波合并验证
             for (const count of [picks.length, 1]) {
                 const subset = picks.slice(0, count);
                 if (subset.length === 0) break;
                 const { evs } = eventsFor(subset);
-                const reach = validateReachability([...this.lastWaveEvents, ...evs.map(({ d, lanes, pass }) => ({ d, lanes, pass }))], ability);
+                const newEvents = evs.map(({ d, lanes, pass }) => ({ d, lanes, pass }));
+                const reach = validateReachability([...upcoming, ...newEvents], ability, reachInit);
                 this.waveStats.validated++;
                 if (reach.reachable) {
-                    evs.forEach((e) => {
-                        this.obstacles.push({ defId: e.defId, lane: e.lane, z: c.world.spawnZ, passed: false, phase: this.rng.next() * 10 });
-                        usedLanes.push(e.lane);
-                        placed.push({ defId: e.defId, lane: e.lane, z: c.world.spawnZ });
-                    });
-                    this.lastWaveEvents = [...this.lastWaveEvents, ...evs.map(({ d, lanes, pass }) => ({ d, lanes, pass }))]
-                        .filter((e) => e.d > this.dist + c.world.spawnZ * 0.5);
+                    for (const e of evs) {
+                        this.obstacles.push({
+                            defId: e.defId, lane: e.lane, z: c.world.spawnZ,
+                            passed: false, phase: this.obstacleRng.next() * 10,
+                        });
+                        for (const ul of e.lanes) usedLanes.add(ul);
+                    }
+                    this.lastWaveEvents = [...upcoming, ...newEvents];
                     spawned = true;
                     this.spawnDebug.fallbackSpawned++;
                     break;
@@ -692,11 +961,14 @@ export class GameCore {
             if (!spawned) this.spawnDebug.fullRejects++;
         }
 
-        // ---- 阳炎碎片（空车道）----
-        if (this.rng.next() < c.spawn.fragmentChance) {
-            const fl = lanesFree.filter((l) => !usedLanes.includes(l));
+        // ---- 阳炎碎片（独立 dropRng，空车道且整条碎片带落在安全地块内）----
+        const fragStartAbsD = this.toAbsD(c.world.spawnZ + c.spawn.fragmentLead);
+        const fragEndAbsD = this.toAbsD(c.world.spawnZ + c.spawn.fragmentLead + Math.max(0, c.spawn.fragmentCount - 1) * c.spawn.fragmentGap);
+        if (this.dropRng.next() < c.spawn.fragmentChance
+            && this.mapGen.path.isSafeSpawnRange(fragStartAbsD, fragEndAbsD, 2, 'obstacles')) {
+            const fl = lanesFree.filter((l) => !usedLanes.has(l));
             if (fl.length) {
-                const lane = fl[Math.floor(this.rng.next() * fl.length)];
+                const lane = fl[Math.floor(this.dropRng.next() * fl.length)];
                 this.spawnDebug.fragRows++;
                 this.spawnDebug.fragLanes.push(lane);
                 for (let k = 0; k < c.spawn.fragmentCount; k++) {
@@ -708,22 +980,24 @@ export class GameCore {
                 }
             }
         }
-        // ---- 道具（难度越高概率越大；主题 itemMul 联动；高温饮水保底）----
+
+        // ---- 道具（独立 dropRng，安全区校验 + 高温饮水保底）----
         const itemMul = this.themeNow.itemMul;
         const itemChance = this.catalog.spawn.itemChance * (1 + 0.6 * this.difficulty) * itemMul;
         const pityDue = this.heat >= c.heat.pityHeat && this.dist - this.lastWaterD > c.heat.pityDist;
-        if (this.rng.next() < itemChance || pityDue) {
-            const fl = lanesFree.filter((l) => !usedLanes.includes(l));
+        const itemZ = c.world.spawnZ + 2;
+        const itemAbsD = this.toAbsD(itemZ);
+        if ((this.dropRng.next() < itemChance || pityDue)
+            && this.mapGen.path.isSafeSpawnRange(itemAbsD, itemAbsD, 2, 'obstacles')) {
+            const fl = lanesFree.filter((l) => !usedLanes.has(l));
             if (fl.length) {
-                // 保底：高温且久无饮水 → 强制甘霖（资源保底，杜绝随机缺水必然失败）
-                const kind: ItemKind = pityDue ? 'water' : this.weightedPick(this.catalog.items).id as ItemKind;
-                this.items.push({ kind, lane: fl[Math.floor(this.rng.next() * fl.length)], z: c.world.spawnZ + 2, got: false });
+                const kind: ItemKind = pityDue ? 'water' : this.weightedPick(this.catalog.items, this.dropRng).id as ItemKind;
+                this.items.push({ kind, lane: fl[Math.floor(this.dropRng.next() * fl.length)], z: itemZ, got: false });
                 this.spawnDebug.itemCount++;
                 if (pityDue) this.spawnDebug.pityFires++;
                 if (kind === 'water') this.lastWaterD = this.dist;
             }
         }
-        void placed;
         return true;
     }
 
@@ -732,36 +1006,38 @@ export class GameCore {
         const def = this.catalog.items.find((x) => x.id === kind);
         const dur = def?.duration ?? 0;
         switch (kind) {
-        case 'magnet': this.magnetT = Math.max(this.magnetT, dur + this.mods.magnetBonus); break;   // 同类延长（含强化）
+        case 'magnet': this.magnetT = Math.max(this.magnetT, dur + this.mods.magnetBonus); break;
         case 'double': this.doubleT = Math.max(this.doubleT, dur); break;
-        case 'dash': this.dashT = Math.max(this.dashT, dur); break;          // 替换剩余
-        case 'shield': this.shieldCharges = Math.max(this.shieldCharges, 1); break;  // 不叠加
+        case 'dash': this.dashT = Math.max(this.dashT, dur); break;
+        case 'shield': this.shieldCharges = Math.max(this.shieldCharges, 1); break;
         case 'water':
-            this.stumbleTimer = 0;                                            // 甘霖：解除踉跄/减速
+            this.stumbleTimer = 0;
             this.slowTimer = 0; this.slowFactor = 1;
-            this.heat = Math.max(0, this.heat - (this.cfg.heat.waterReduce + this.mods.waterReduceBonus)); // 降温（含强化）
-            this.lastWaterD = this.dist;                                      // 保底窗口重置
+            this.heat = Math.max(0, this.heat - (this.cfg.heat.waterReduce + this.mods.waterReduceBonus));
+            this.lastWaterD = this.dist;
             this.events.push({ type: 'water' });
             break;
         case 'staff':
-            this.staffCharges = Math.min(this.staffCharges + 3, 6 + this.mods.staffCapBonus); // 上限含强化
+            this.staffCharges = Math.min(this.staffCharges + 3, 6 + this.mods.staffCapBonus);
             break;
         case 'leap':
-            this.leapT = Math.max(this.leapT, dur);                           // 巨人之跃：同类延长
+            this.leapT = Math.max(this.leapT, dur);
             break;
         }
     }
 
+    /** 侧景装饰生成（独立 decorRng，不干扰障碍/掉落随机流） */
     private spawnProp() {
         const c = this.cfg.spawn;
-        if (!this.mapGen.path.isSafeSpawnZone(this.dist + this.cfg.world.spawnZ, 6)) return;
-        const side = this.rng.next() < 0.5 ? -1 : 1;
+        const absD = this.toAbsD(this.cfg.world.spawnZ);
+        if (!this.mapGen.path.isSafeSpawnRange(absD, absD, 6, 'props')) return;
+        const side = this.decorRng.next() < 0.5 ? -1 : 1;
         this.props.push({
-            x: side * (c.propSideMin + this.rng.next() * c.propSideSpread),
+            x: side * (c.propSideMin + this.decorRng.next() * c.propSideSpread),
             z: this.cfg.world.spawnZ,
-            kind: this.rng.next() < c.treeChance ? 'tree' : 'rock',
-            s: c.propScaleMin + this.rng.next() * c.propScaleSpread,
-            sway: this.rng.next() * 6.28,
+            kind: this.decorRng.next() < c.treeChance ? 'tree' : 'rock',
+            s: c.propScaleMin + this.decorRng.next() * c.propScaleSpread,
+            sway: this.decorRng.next() * 6.28,
         });
     }
 }
