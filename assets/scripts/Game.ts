@@ -18,12 +18,23 @@ import { Renderer2D } from './render/Renderer2D';
 import { Renderer3D } from './render/Renderer3D';
 import { AdService, newAdService } from './platform/AdService';
 import { installGlobalErrorHooks } from './platform/ErrorHooks';
-import { Save } from './platform/Save';
+import { Save, defaultSaveData } from './platform/Save';
 import { AudioMgr, SfxName } from './audio/AudioMgr';
 import { LOGICAL_W, PLAYER_Y } from './render/layout';
+import { Economy } from './core/Economy';
+import { PlayerStats } from './core/PlayerStats';
+import { DailyQuests, QUEST_TEMPLATES } from './core/Quests';
+import { Achievements, ACHIEVEMENTS } from './core/Achievements';
+import { Upgrades, UpgradeKind, UPGRADE_DEFS, totalLevels } from './core/Upgrades';
+import { Tutorial, TUTORIAL_STEPS } from './core/Tutorial';
 
 const { ccclass } = _decorator;
 const log = new Logger('Game');
+
+/** 原子消费辅助：Economy.spend 透传 */
+function econSpend(econ: Economy, amount: number): boolean {
+    return econ.spend(amount);
+}
 
 @ccclass('Game')
 export class Game extends Component {
@@ -38,6 +49,20 @@ export class Game extends Component {
     private save: Save | null = null;
     private audio: AudioMgr | null = null;
     private skinIdx = 0;
+    // ---- Phase 6 成长系统 ----
+    economy = new Economy();
+    stats = new PlayerStats(defaultSaveData().stats);
+    quests = new DailyQuests(defaultSaveData().quests, '1970-01-01');
+    ach = new Achievements();
+    upgrades = new Upgrades({});
+    tutorial = new Tutorial(false);
+    page: string | null = null;
+    private runGold = 0;
+    private lastFragsForGold = 0;
+    private lastThemeIdx = 0;
+    private runSeed = 0;
+    private sync = { totalLi: 0, totalFrags: 0, itemUses: {} as Record<string, number> };
+    private tutorialPendingDone = false;
 
     async start() {
         installGlobalErrorHooks();
@@ -64,7 +89,16 @@ export class Game extends Component {
             get: (k: string) => sys.localStorage.getItem(k),
             set: (k: string, v: string) => { sys.localStorage.setItem(k, v); },
         });
-        this.skinIdx = Number(sys.localStorage.getItem('zhuri.skin') ?? 0) % (skins.skins.length || 1);
+        // Phase 6：存档装载到各成长系统（迁移/损坏处理已由 Save 完成）
+        this.economy = new Economy(this.save.data.gold);
+        this.stats = new PlayerStats(this.save.data.stats);
+        this.quests = new DailyQuests(this.save.data.quests, this.today());
+        this.upgrades = new Upgrades(this.save.data.upgrades);
+        this.skinIdx = Math.max(0, this.save.data.skinsOwned.indexOf(this.save.data.skin));
+        if (this.save.data.skinsOwned.indexOf(this.save.data.skin) < 0) {
+            this.save.data.skin = 'kuafu';
+            this.skinIdx = 0;
+        }
         this.audio = new AudioMgr(this.node);
         void this.audio.load();
         log.info('配置加载成功 renderMode=' + cfg.renderMode + ' 障碍种类=' + catalog.obstacles.length);
@@ -73,10 +107,20 @@ export class Game extends Component {
         // 2D 渲染器需先于 Hud2D 创建节点，保证 UI 绘制在世界之上
         if (cfg.renderMode === '2d') this.renderer = new Renderer2D(this.node, cfg, catalog);
         this.hud = new Hud2D(this.node, cfg);
-        if (this.save) this.hud.setBestLi(this.save.bestLi());
+        if (this.save) this.hud.setBestLi(this.save.data.bestLi);
         if (cfg.renderMode === '3d') this.renderer = new Renderer3D(cfg, catalog);
         this.inputCtl = new InputController(this.makeDelegate(), cfg.input);
         this.inputCtl.attach();
+        this.hud.setHandlers({
+            onPageAction: (action: string) => this.onPageAction(action),
+            onTutorialSkip: () => this.tutorial.skip(),
+            onNavPage: (page: string) => {
+                if (this.core?.state !== 'title') return;
+                if (page === 'tutorial') { this.startTutorial(); return; }
+                this.page = page;
+                this.refreshPage();
+            },
+        });
         // 退后台自动暂停（微信 onHide / 浏览器切页），回到前台由玩家手动恢复
         game.on(CCGame.EVENT_HIDE, this.onGameHide, this);
         log.info('装配完成');
@@ -100,13 +144,45 @@ export class Game extends Component {
         this.core.update(dtRaw);
         this.ad.update(dtRaw);
         const events = this.core.drainEvents();
-        // 结算存档：无尽最佳（死亡/通关瞬间）+ 征途通关标记
+        // Phase 6：成长系统喂数（统计/任务进度/教程推进）
+        this.stats.onEvents(events);
+        this.tutorial.onEvents(events);
+        const themeIdx = this.core.themeIdx;
+        if (themeIdx !== this.lastThemeIdx) {
+            if (themeIdx > this.lastThemeIdx) this.stats.visitTheme(themeIdx);
+            this.lastThemeIdx = themeIdx;
+        }
+        // 任务累计/峰值喂数（按累计值增量，dt 无关）
+        this.quests.addProgress('totalLi', Math.max(0, Math.round(this.core.li) - this.sync.totalLi));
+        this.sync.totalLi = Math.round(this.core.li);
+        this.quests.addProgress('totalFrags', Math.max(0, this.core.frags - this.sync.totalFrags));
+        this.sync.totalFrags = this.core.frags;
+        const iu = this.stats.stats.itemUses;
+        for (const k of ['dash', 'magnet', 'leap', 'shield', 'water', 'staff'] as const) {
+            const cur = iu[k] ?? 0;
+            const key = `use${k[0].toUpperCase()}${k.slice(1)}` as never;
+            this.quests.addProgress(key, Math.max(0, cur - (this.sync.itemUses[k] ?? 0)));
+            this.sync.itemUses[k] = cur;
+        }
+        this.quests.setRunMetric('runLi', Math.round(this.core.li));
+        this.quests.setRunMetric('runFrags', this.core.frags);
+        // 金币结算：碎片按倍率实时换金币（事务 id 唯一防重）
+        if (this.core.frags !== this.lastFragsForGold) {
+            const delta = this.core.frags - this.lastFragsForGold;
+            this.lastFragsForGold = this.core.frags;
+            this.economy.grant(`frag:${this.runSeed}:${this.lastFragsForGold}`, Math.round(delta * this.upgrades.goldMul()));
+        }
+        // 结算存档：无尽最佳（死亡/通关瞬间）+ 征途通关标记 + 单局结算
         if (this.save) {
             for (const e of events) {
                 if (e.type === 'died' && this.core.mode === 'endless') {
-                    if (this.save.setBestLi(this.core.li)) this.hud?.setBestLi(this.save.bestLi());
+                    const li = Math.floor(this.core.li);
+                    if (li > this.save.data.bestLi) {
+                        this.save.data.bestLi = li;
+                        this.hud?.setBestLi(li);
+                    }
                 }
-                if (e.type === 'journeyDone') this.save.setJourneyDone();
+                if (e.type === 'journeyDone') this.save.data.journeyDone = true;
             }
         }
         this.routeEvents(events);
@@ -203,20 +279,40 @@ export class Game extends Component {
         this.audio?.playSfx('ui');
     }
 
+    /** 单局结算：金币事务、统计落账、存档 flush */
+    private settleRun() {
+        const core = this.core!;
+        const gold = Math.round(core.frags * this.upgrades.goldMul());
+        const tx = `run:${core.mode}:${Date.now()}:${Math.floor(core.dist * 100)}`;
+        this.economy.grant(tx, gold);
+        this.stats.onRunSettle(core.li, core.frags, gold, core.state, core.themeIdx, core.themeIdx);
+        this.save?.flush();
+    }
+
+    /** 新手教程启动：稀疏生成 + 顺序引导（可跳过） */
+    private startTutorial() {
+        if (!this.core || !this.save) return;
+        this.tutorialPendingDone = false;
+        this.tutorial = new Tutorial(true, 0);
+        this.startMode('endless');
+        // 教程局：稀疏生成 + 快速路口，让玩家专注动作
+        this.core.cfg.spawn.rowInterval = 16;
+        this.core.cfg.map.turnGapMin = 30;
+        this.core.cfg.map.turnGapMax = 60;
+        this.hud?.showTutorialHint(this.tutorial.step?.text ?? '', !this.save.data.tutorial.done);
+    }
+
+    private today(): string {
+        const d = new Date();
+        const pad = (n: number) => String(n).padStart(2, '0');
+        return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
+    }
+
     /** 按模式启动；记录模式（core.mode 影响征途判定与太阳进度） */
     private startMode(mode: 'endless' | 'journey') {
         const core = this.core!;
         core.mode = mode;
         core.startRun();
-        this.saveBest();
-    }
-
-    /** 无尽模式：更新最佳纪录（每次起跑/死亡结算时刷新） */
-    private saveBest() {
-        if (!this.save || !this.core) return;
-        if (this.core.mode === 'endless' && this.core.li > 0) {
-            this.save.setBestLi(this.core.li);
-        }
     }
 
     private makeDelegate(): InputDelegate {
@@ -239,8 +335,22 @@ export class Game extends Component {
             },
             onTapStart: (gx: number, gy: number) => {
                 if (!this.core || !this.hud) return;
-                if (gx > 408 && gx < 446 && gy > 20 && gy < 62) this.hud.toggleMute();
+                if (gx > 408 && gx < 446 && gy > 20 && gy < 62) { const m = this.hud.toggleMute(); this.audio?.setMuted(m); return; }
+                if (this.hud.hitTutorialSkip(gx, gy)) { this.tutorial.skip(); this.hud.hideTutorialHint(); return; }
                 if (this.core.state === 'title' && this.hud.hitSkinButton(gx, gy)) this.cycleSkin();
+                // 页面命中（任务领取/商店购买/强化升级/返回）
+                if (this.page) {
+                    const action = this.hud.pageTap(gx, gy);
+                    if (action === '__back__') this.closePage();
+                    else if (action) this.onPageAction(action);
+                    return;
+                }
+                // 标题导航（功能页/教程）
+                if (this.core.state === 'title') {
+                    const nav = this.hud.hitNavButton(gx, gy);
+                    if (nav === 'tutorial') { this.startTutorial(); return; }
+                    if (nav) { this.page = nav; this.refreshPage(); return; }
+                }
             },
             onActionStart: () => {
                 if (this.core && this.core.state === 'title') this.startMode('endless');
@@ -255,21 +365,183 @@ export class Game extends Component {
         };
     }
 
+    /** 页面交互：领取/购买/使用/升级/设置（幂等由 Economy/quests.claimed 保证） */
+    private onPageAction(action: string): void {
+        if (action === '__back__') { this.closePage(); return; }
+        // 任务领取
+        if (action.startsWith('claimq:')) {
+            const id = action.slice(7);
+            const tpl = QUEST_TEMPLATES.find((t) => t.id === id);
+            if (!tpl || !this.quests.isComplete(tpl) || this.quests.isClaimed(tpl)) return;
+            if (this.quests.claim(tpl, this.save?.data.quests.claimed ?? [])) {
+                this.save?.data.quests.claimed.push(tpl.id);
+                this.economy.grant(`q:${this.quests.state.date}:${tpl.id}`, tpl.reward);
+                this.refreshPage();
+                this.audio?.playSfx('coin');
+            }
+            return;
+        }
+        // 成就领取
+        if (action.startsWith('claima:')) {
+            const id = action.slice(7);
+            const def = ACHIEVEMENTS.find((a) => a.id === id);
+            if (!def || !this.save) return;
+            const extra = { skins: this.save.data.skinsOwned.length, upgradeLevels: totalLevels(this.upgrades.levels) };
+            if (!this.ach.isUnlocked(def, this.save.data.stats, extra) || this.ach.isClaimed(def, this.save.data.achClaimed)) return;
+            if (this.ach.claim(def, this.save.data.achClaimed)) {
+                this.save.data.achClaimed.push(def.id);
+                this.economy.grant(`a:${def.id}`, def.reward);
+                this.refreshPage();
+                this.audio?.playSfx('coin');
+            }
+            return;
+        }
+        // 皮肤购买/使用
+        if (action.startsWith('buy:') || action.startsWith('use:')) {
+            const id = action.slice(4);
+            if (!this.skins || !this.save) return;
+            const skin = this.skins.skins.find((x) => x.id === id);
+            if (!skin) return;
+            if (action.startsWith('buy:')) {
+                const costs: Record<string, number> = { xuanjia: 600, chiyan: 800, cangteng: 800, jinwu: 1200, weishui: 1000, huangmo: 1000, fusang: 2000 };
+                if (this.save.data.skinsOwned.includes(id) || !econSpend(this.economy, costs[id] ?? 9999)) return;
+                this.save.data.skinsOwned.push(id);
+            }
+            this.save.data.skin = id;
+            this.skinIdx = Math.max(0, this.skins.skins.findIndex((x) => x.id === id));
+            this.save.flush();
+            this.applySkin();
+            this.hud?.setSkinIdx(this.skinIdx, this.skins.skins.map((x) => x.label));
+            this.refreshPage();
+            this.audio?.playSfx('ui');
+            return;
+        }
+        // 强化升级
+        if (action.startsWith('up:')) {
+            const kind = action.slice(3) as UpgradeKind;
+            const cost = this.upgrades.cost(kind);
+            if (cost === null || !econSpend(this.economy, cost)) return;
+            this.upgrades.apply(kind);
+            if (this.save) this.save.data.upgrades = { ...this.upgrades.levels };
+            this.save?.flush();
+            this.refreshPage();
+            this.audio?.playSfx('ui');
+            return;
+        }
+        // 设置
+        if (action === 'restore') {
+            if (this.save?.restoreBackup()) { this.refreshPage(); this.audio?.playSfx('ui'); }
+            return;
+        }
+        if (action === 'retutorial') {
+            if (this.save) { this.save.data.tutorial.done = false; this.save.flush(); }
+            this.closePage();
+            this.audio?.playSfx('ui');
+        }
+    }
+
+    private closePage(): void {
+        this.page = null;
+        this.hud?.closePage();
+    }
+
+    /** 刷新当前页内容 */
+    private refreshPage(): void {
+        if (!this.page || !this.save || !this.skins || !this.core) return;
+        const d = this.save.data;
+        const goldLbl = `灵光金币 ${this.economy.gold}`;
+        if (this.page === 'quests') {
+            const rows: { label: string; action?: string }[] = [{ label: goldLbl }];
+            for (const t of this.quests.todays()) {
+                const prog = this.quests.progressOf(t);
+                const done = this.quests.isComplete(t);
+                const claimed = d.quests.claimed.includes(t.id);
+                rows.push({
+                    label: `${t.label}  ${prog}/${t.goal}  ${claimed ? '已领' : done ? `【领取 ${t.reward}】` : ''}`,
+                    action: done && !claimed ? `claimq:${t.id}` : undefined,
+                });
+            }
+            this.hud?.openPage('quests', '每日任务', rows);
+        } else if (this.page === 'achievements') {
+            const extra = { skins: d.skinsOwned.length, upgradeLevels: totalLevels(this.upgrades.levels) };
+            const rows: { label: string; action?: string }[] = [{ label: goldLbl }];
+            const unlocked = this.ach.unlockedList(d.stats, extra).filter((a) => !this.ach.isClaimed(a, d.achClaimed));
+            rows.push({ label: `已解锁 ${this.ach.unlockedList(d.stats, extra).length}/${ACHIEVEMENTS.length}` });
+            for (const a of unlocked.slice(0, 7)) {
+                rows.push({ label: `${a.label}  【领取 ${a.reward}】`, action: `claima:${a.id}` });
+            }
+            if (!unlocked.length) rows.push({ label: '暂无可领取成就（继续奔跑解锁）' });
+            this.hud?.openPage('achievements', '成就', rows);
+        } else if (this.page === 'shop') {
+            const rows: { label: string; action?: string }[] = [{ label: goldLbl }, { label: '— 皮肤（点击购买/使用）—' }];
+            for (const sk of this.skins.skins) {
+                const owned = d.skinsOwned.includes(sk.id);
+                rows.push({
+                    label: owned ? (d.skin === sk.id ? `${sk.label} ✓使用中` : `${sk.label} 【使用】`) : `${sk.label} 【购买】`,
+                    action: d.skin === sk.id ? undefined : owned ? `use:${sk.id}` : `buy:${sk.id}`,
+                });
+            }
+            this.hud?.openPage('shop', '皮肤商店', rows);
+        } else if (this.page === 'upgrades') {
+            const rows: { label: string; action?: string }[] = [{ label: goldLbl }];
+            for (const def of UPGRADE_DEFS) {
+                const lv = this.upgrades.level(def.kind);
+                const cost = this.upgrades.cost(def.kind);
+                rows.push({
+                    label: cost === null ? `${def.label} Lv${lv} 已满级` : `${def.label} Lv${lv}  ${def.desc(lv + 1)}  【${cost} 升级】`,
+                    action: cost === null ? undefined : `up:${def.kind}`,
+                });
+            }
+            this.hud?.openPage('upgrades', '能力强化', rows);
+        } else if (this.page === 'records') {
+            const st = d.stats;
+            this.hud?.openPage('records', '个人纪录', [
+                { label: `无尽最佳 ${d.bestLi} 里` },
+                { label: `累计 ${Math.floor(st.totalLi)} 里 / ${st.runs} 局` },
+                { label: `累计阳炎 ${st.totalFrags}` },
+                { label: `路口通过 ${st.turns}` },
+                { label: `击碎障碍 ${st.obstaclesSmashed}` },
+                { label: `累计金币 ${st.goldEarned}` },
+                { label: `征途 ${d.journeyDone ? '已完成' : '未完成'}` },
+            ]);
+        } else if (this.page === 'settings') {
+            this.hud?.openPage('settings', '设置', [
+                { label: this.hud?.isMutedVisual ? '声音 已静音' : '声音 开启' },
+                { label: '恢复备份存档', action: 'restore' },
+                { label: '重看新手教程', action: 'retutorial' },
+            ]);
+        }
+    }
+
     private onButton(btn: HudButton) {
         const core = this.core!;
         switch (btn) {
         case 'mute':
-                this.hud!.toggleMute();
+            this.audio?.setMuted(this.hud!.toggleMute());
             break;
         case 'start':
         case 'restart':
-            core.startRun();
+            this.startMode('endless');
+            break;
+        case 'startJourney':
+            this.startMode('journey');
+            break;
+        case 'pause':
+            core.pause();
+            break;
+        case 'resume':
+            core.resume();
             break;
         case 'revive':
                 // 真机由 WxAdService 拉起 wx.createRewardedVideoAd（P4 接真实 adUnitId）
-                this.ad!.show(() => core.revive());
+                this.ad!.show(() => {
+                    core.revive();
+                    this.audio?.playSfx('revive');
+                });
+            break;
+        case 'cycleSkin':
+            if (core.state === 'title') this.cycleSkin();
             break;
         }
     }
-
 }

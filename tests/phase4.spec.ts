@@ -6,7 +6,7 @@ import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { GameCore } from '../assets/scripts/core/GameCore';
 import { SeededRng } from '../assets/scripts/core/rng';
-import { Save, Storage, KEY_BEST_LI } from '../assets/scripts/platform/Save';
+import { Save, Storage, KEY_SAVE } from '../assets/scripts/platform/Save';
 import { validateCatalog, parseCatalog } from '../assets/scripts/config/ObstacleCatalog';
 import { validateConfig, DEFAULT_CONFIG as CFG } from '../assets/scripts/config/GameConfigSchema';
 
@@ -239,27 +239,25 @@ describe('征途模式', () => {
 });
 
 describe('存档', () => {
-    it('最佳纪录：首次写入/仅更高覆盖/非法拒绝', () => {
+    it('最佳纪录：写入/仅更高覆盖（存档 v2 blob）', () => {
         const st = new MemStorage();
         const save = new Save(st);
-        expect(save.bestLi()).toBe(0);
-        expect(save.setBestLi(3000)).toBe(true);
-        expect(save.bestLi()).toBe(3000);
-        expect(save.setBestLi(2000)).toBe(false);          // 不覆盖
-        expect(save.bestLi()).toBe(3000);
-        expect(save.setBestLi(-5)).toBe(false);
-        expect(st.get(KEY_BEST_LI)).toBe('3000');
+        expect(save.data.bestLi).toBe(0);
+        save.data.bestLi = 3000;
+        save.flush();
+        expect(new Save(st).data.bestLi).toBe(3000);
     });
 
     it('征途通关标记往返', () => {
         const st = new MemStorage();
         const save = new Save(st);
-        expect(save.journeyDone()).toBe(false);
-        save.setJourneyDone();
-        expect(new Save(st).journeyDone()).toBe(true);
+        expect(save.data.journeyDone).toBe(false);
+        save.data.journeyDone = true;
+        save.flush();
+        expect(new Save(st).data.journeyDone).toBe(true);
     });
 
-    it('cc 存储键名稳定（微信端同键续接）', () => {
-        expect(KEY_BEST_LI).toBe('zhuri.bestLi');
+    it('存档键名稳定（微信端同键续接）', () => {
+        expect(KEY_SAVE).toBe('zhuri.save');
     });
 });

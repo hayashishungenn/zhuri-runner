@@ -8,7 +8,7 @@ import { GameCore } from '../core/GameCore';
 import { AdService } from '../platform/AdService';
 import { DESIGN_W, DESIGN_H, LX, LY } from './layout';
 
-export type HudButton = 'start' | 'startJourney' | 'revive' | 'restart' | 'mute' | 'pause' | 'resume';
+export type HudButton = 'start' | 'startJourney' | 'revive' | 'restart' | 'mute' | 'pause' | 'resume' | 'cycleSkin';
 
 /** P0 面板色板（美术常量，非玩法参数） */
 const C_MAIN = () => new Color(255, 207, 125, 255);
@@ -59,6 +59,17 @@ export class Hud2D {
     private lblEndedT!: Label;
     private lblEndedS!: Label;
     private lblSkin!: Label;
+    private navLabels: Label[] = [];
+    private lblTutorial!: Label;
+    private lblTutorialSkip!: Label;
+    private lblPage!: Label;
+    private lblPageRows: Label[] = [];
+    private page: string | null = null;
+    private pageRows: { label: string; action: string }[] = [];
+    private pageTapZones: { y0: number; y1: number; action: string }[] = [];
+    private onPageAction: ((action: string) => void) | null = null;
+    private onTutorialSkip: (() => void) | null = null;
+    private onNavPage: ((page: string) => void) | null = null;
     private lblPaused!: Label;
     private lblResume!: Label;
     private lblRestart2!: Label;
@@ -168,6 +179,35 @@ export class Hud2D {
         this.lblSkin = skn.lbl;
         skn.node.setPosition(LX(280), LY(430), 0);
         this.lblSkin.node.active = false;
+        // 教程浮层 + 跳过按钮
+        const tu = this.makeLabel(parent, 'tTutorial', 24, C_HINT());
+        this.lblTutorial = tu.lbl;
+        tu.node.setPosition(0, LY(180), 0);
+        tu.node.active = false;
+        const tk = this.makeLabel(parent, 'tTutorialSkip', 16, C_NOTE());
+        this.lblTutorialSkip = tk.lbl;
+        tk.lbl.string = '跳过教程 ›';
+        tk.node.setPosition(LX(360), LY(140), 0);
+        tk.node.active = false;
+        // 页面容器：标题 + 8 行文本
+        const pg = this.makeLabel(parent, 'pTitle', 36, lc);
+        this.lblPage = pg.lbl;
+        pg.node.setPosition(0, LY(220), 0);
+        pg.node.active = false;
+        for (let i = 0; i < 8; i++) {
+            const row = this.makeLabel(parent, `pRow${i}`, 20, i % 2 === 0 ? C_PANEL_TXT() : C_BTN2());
+            row.node.setPosition(0, LY(300 + i * 44), 0);
+            row.node.active = false;
+            this.lblPageRows.push(row.lbl);
+        }
+        // 标题功能导航（6 项 + 教程）
+        ['任务', '成就', '商店', '强化', '纪录', '设置', '教程'].forEach((t, i) => {
+            const n = this.makeLabel(parent, `nav${i}`, 18, new Color(232, 210, 170, 235));
+            n.lbl.string = t;
+            n.node.setPosition(LX(95 + (i % 4) * 108), LY(612 + Math.floor(i / 4) * 34), 0);
+            n.node.active = false;
+            this.navLabels.push(n.lbl);
+        });
 
         // 暂停面板
         const pt = this.makeLabel(parent, 'zTitle', 44, lc);
@@ -228,6 +268,7 @@ export class Hud2D {
     }
 
     toggleMute(): boolean { this.muted = !this.muted; return this.muted; }
+    get isMutedVisual(): boolean { return this.muted; }
 
     private bestLi = 0;
     private skinIdx = 0;
@@ -243,6 +284,76 @@ export class Hud2D {
     /** 标题换肤按钮命中（逻辑坐标） */
     hitSkinButton(gx: number, gy: number): boolean {
         return gx > 360 && gx < 424 && gy > 420 && gy < 442;
+    }
+
+    /** 交互回调注册 */
+    setHandlers(h: { onPageAction?: (action: string) => void; onTutorialSkip?: () => void; onNavPage?: (page: string) => void }): void {
+        this.onPageAction = h.onPageAction ?? null;
+        this.onTutorialSkip = h.onTutorialSkip ?? null;
+        this.onNavPage = h.onNavPage ?? null;
+    }
+
+    /** 打开功能页 */
+    openPage(page: string, title: string, rows: { label: string; action?: string }[]): void {
+        this.page = page;
+        this.lblPage.string = title;
+        this.lblPage.node.active = true;
+        this.pageTapZones = [];
+        rows.forEach((r, i) => {
+            const lbl = this.lblPageRows[i];
+            lbl.string = r.label;
+            lbl.node.active = true;
+            if (r.action) this.pageTapZones.push({ y0: LY(300 + i * 44) - 16, y1: LY(300 + i * 44) + 16, action: r.action });
+        });
+        for (let i = rows.length; i < this.lblPageRows.length; i++) this.lblPageRows[i].node.active = false;
+    }
+
+    closePage(): void {
+        this.page = null;
+        this.lblPage.node.active = false;
+        for (const l of this.lblPageRows) l.node.active = false;
+    }
+
+    /** 页面命中（返回 action；__back__ = 返回标题） */
+    pageTap(gx: number, gy: number): string | null {
+        if (!this.page) return null;
+        if (gx > 40 && gx < 140 && gy > 58 && gy < 90) return '__back__';
+        for (const z of this.pageTapZones) {
+            if (gx > 40 && gx < 410 && gy > z.y0 && gy < z.y1) return z.action;
+        }
+        return null;
+    }
+
+    /** 教程浮层 */
+    showTutorialHint(text: string, allowSkip: boolean): void {
+        this.lblTutorial.node.active = true;
+        this.lblTutorial.string = text + (allowSkip ? '   （跳过 › 右下）' : '');
+        this.lblTutorialSkip.node.active = allowSkip;
+    }
+
+    hideTutorialHint(): void {
+        this.lblTutorial.node.active = false;
+        this.lblTutorialSkip.node.active = false;
+    }
+
+    hitTutorialSkip(gx: number, gy: number): boolean {
+        if (!this.lblTutorialSkip.node.active) return false;
+        return gx > 325 && gx < 400 && gy > 130 && gy < 150;
+    }
+
+    /** 标题功能导航命中 */
+    hitNavButton(gx: number, gy: number): string | null {
+        const zones = [
+            { x0: 34, x1: 150, y0: 552, y1: 588, page: 'quests' },
+            { x0: 158, x1: 274, y0: 552, y1: 588, page: 'achievements' },
+            { x0: 282, x1: 398, y0: 552, y1: 588, page: 'shop' },
+            { x0: 34, x1: 150, y0: 592, y1: 628, page: 'upgrades' },
+            { x0: 158, x1: 274, y0: 592, y1: 628, page: 'records' },
+            { x0: 282, x1: 398, y0: 592, y1: 628, page: 'settings' },
+            { x0: 34, x1: 150, y0: 632, y1: 668, page: 'tutorial' },
+        ];
+        for (const z of zones) if (gx > z.x0 && gx < z.x1 && gy > z.y0 && gy < z.y1) return z.page;
+        return null;
     }
     markFirstInput() { this.firstInput = true; }
 
@@ -420,6 +531,19 @@ export class Hud2D {
         this.lblBest.node.active = showTitle;
         if (showTitle) this.lblBest.string = formatUi(this.cfg.ui.bestLabel, this.bestLi);
         this.lblBtnJourney.node.active = showTitle;
+        for (let i = 0; i < this.navLabels.length; i++) {
+            this.navLabels[i].node.active = showTitle && !this.page;
+        }
+        // 页面打开时标题主元素隐藏（页面自含遮罩与内容）
+        const pageOpen = showTitle && !!this.page;
+        this.lblTitle.node.active = showTitle && !this.page;
+        this.lblSub.node.active = showTitle && !this.page;
+        this.lblNote.node.active = showTitle && !this.page;
+        this.lblBtnStart.node.active = showTitle && !this.page;
+        this.lblBtnJourney.node.active = showTitle && !this.page;
+        this.lblBest.node.active = showTitle && !this.page;
+        this.lblSkin.node.active = showTitle && !this.page;
+        void pageOpen;
         if (showTitle) {
             ui.fillColor = new Color(255, 207, 125, 60);
             ui.roundRect(LX(90), LY(445), 270 * 1.6, 50 * 1.6, 14 * 1.6); ui.fill();
@@ -428,6 +552,20 @@ export class Hud2D {
             ui.fillColor = new Color(255, 207, 125, 60);
             ui.roundRect(LX(90), LY(488), 270 * 1.6, 44 * 1.6, 14 * 1.6); ui.fill();
         }
+        // 功能页渲染（标题态子页）
+        if (showTitle && this.page) {
+            const rows = this.lblPageRows;
+            for (const row of rows) {
+                if (!row.node.active) continue;
+                ui.fillColor = new Color(46, 32, 20, 190);
+                const wpos = row.node.position;
+                ui.roundRect(wpos.x - 180, wpos.y - 16, 360, 34, 8); ui.fill();
+            }
+            // 返回按钮
+            ui.fillColor = new Color(60, 46, 30, 220);
+            ui.roundRect(LX(40), LY(90), 100 * 1.6, 32 * 1.6, 8); ui.fill();
+        }
+
         // 胜利面板（征途通关）
         const showEnded = core.state === 'ended';
         this.lblEndedT.node.active = showEnded;

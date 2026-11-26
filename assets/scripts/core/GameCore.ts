@@ -53,6 +53,10 @@ export class GameCore {
     // ---- Phase 4 游戏模式与征途 ----
     mode: 'endless' | 'journey' = 'endless';
     journeyStage = 0;       // 已完成的征途阶段数
+    // ---- Phase 6 强化效果（由 Game 装配时注入；0 = 无强化） ----
+    mods = { staffCapBonus: 0, waterReduceBonus: 0, magnetBonus: 0, heatResist: 1, goldMul: 1 };
+    /** 当前主题索引（渲染/统计共用） */
+    get themeIdx(): number { return this.path.segmentAt(this.dist).theme; }
     /** 当前难度 [0,1]（里程驱动，封顶） */
     get difficulty(): number { return Math.min(this.li / this.cfg.difficulty.rampLi, 1); }
 
@@ -342,7 +346,7 @@ export class GameCore {
         // 高温：随难度与主题升温，封顶 100（永不致死——热满仅强制减速 maxSlow）
         if (this.heat < 100) {
             const themeMul = this.themeNow.heatMul;
-            this.heat = Math.min(100, this.heat + c.heat.baseRate * themeMul * (1 + c.heat.dScale * this.difficulty) * dt);
+            this.heat = Math.min(100, this.heat + c.heat.baseRate * themeMul * (1 + c.heat.dScale * this.difficulty) * this.mods.heatResist * dt);
         }
         if (this.li >= this.milestone) {
             this.events.push({ type: 'milestone', n: this.milestone });
@@ -734,7 +738,7 @@ export class GameCore {
         case 'water':
             this.stumbleTimer = 0;                                            // 甘霖：解除踉跄/减速
             this.slowTimer = 0; this.slowFactor = 1;
-            this.heat = Math.max(0, this.heat - this.cfg.heat.waterReduce);   // 降温
+            this.heat = Math.max(0, this.heat - (this.cfg.heat.waterReduce + this.mods.waterReduceBonus)); // 降温（含强化）
             this.lastWaterD = this.dist;                                      // 保底窗口重置
             this.events.push({ type: 'water' });
             break;
