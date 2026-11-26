@@ -16,6 +16,7 @@ import type { DailyQuests } from './Quests';
 import type { StartRunBuffs } from './types';
 
 export interface AdRewardTicket {
+    ticketId?: number;
     scene: AdScene;
     runId: number;
     snapshot: {
@@ -59,6 +60,12 @@ export class AdRewardCoordinator {
     private pendingTrialSkinId: string | null = null;
     /** 当前局正在试用的皮肤 id（null = 未试用） */
     private activeTrialSkinId: string | null = null;
+    private nextTicketId = 1;
+    private consumedTickets = new Set<number>();
+
+    private makeTicket(scene: AdScene, runId: number, snapshot: AdRewardTicket['snapshot']): AdRewardTicket {
+        return { ticketId: this.nextTicketId++, scene, runId, snapshot };
+    }
 
     get hasPendingBuffs(): boolean { return this.pendingBuffs !== null; }
     get currentTrialSkinId(): string | null { return this.activeTrialSkinId ?? this.pendingTrialSkinId; }
@@ -72,43 +79,35 @@ export class AdRewardCoordinator {
         switch (scene) {
         case 'revive':
             if (!ctx.core.reviveUsable() || ctx.core.state !== 'dead') return null;
-            return { scene, runId, snapshot: {} };
+            return this.makeTicket(scene, runId, {});
 
         case 'doubleCoins': {
             if (ctx.core.state !== 'dead' && ctx.core.state !== 'ended') return null;
             if (ctx.ledger.isDoubleCoinsClaimed) return null;
             const bonus = ctx.ledger.totalGrantedGold;
             if (bonus <= 0) return null;
-            return { scene, runId, snapshot: { doubleCoinsBonus: bonus } };
+            return this.makeTicket(scene, runId, { doubleCoinsBonus: bonus });
         }
 
         case 'dailyDouble': {
             const tpl = ctx.quests.todays().find((t) => ctx.quests.isComplete(t) && !ctx.quests.isClaimed(t));
             if (!tpl) return null;
-            return {
-                scene,
-                runId,
-                snapshot: {
-                    dailyDate: ctx.quests.state.date,
-                    dailyQuestId: tpl.id,
-                    dailyReward: tpl.reward * 2,
-                },
-            };
+            return this.makeTicket(scene, runId, {
+                dailyDate: ctx.quests.state.date,
+                dailyQuestId: tpl.id,
+                dailyReward: tpl.reward * 2,
+            });
         }
 
         case 'timedPower':
-            return {
-                scene,
-                runId,
-                snapshot: { timedBuffs: { magnetT: 12, dashT: 3 } },
-            };
+            return this.makeTicket(scene, runId, { timedBuffs: { magnetT: 12, dashT: 3 } });
 
         case 'skinTrial': {
             // 优先选择未拥有的皮肤试用；若全拥有则选下一套
             const unowned = ctx.allSkinIds.filter((id) => !ctx.ownedSkins.includes(id));
             const pool = unowned.length ? unowned : ctx.allSkinIds.filter((id) => id !== ctx.currentSkinId);
             const trialSkinId = pool[0] ?? ctx.currentSkinId;
-            return { scene, runId, snapshot: { trialSkinId } };
+            return this.makeTicket(scene, runId, { trialSkinId });
         }
         }
     }
@@ -117,13 +116,22 @@ export class AdRewardCoordinator {
      * 广告完整观看回调到达时，按票据绑定的 runId 与快照安全兑现奖励。
      */
     applyReward(ticket: AdRewardTicket, ctx: AdApplyContext): AdApplyOutcome {
+        if (ticket.ticketId !== undefined && this.consumedTickets.has(ticket.ticketId)) {
+            return { applied: false, reason: 'alreadyConsumed' };
+        }
+        const finish = (outcome: AdApplyOutcome): AdApplyOutcome => {
+            if (outcome.applied && ticket.ticketId !== undefined) {
+                this.consumedTickets.add(ticket.ticketId);
+            }
+            return outcome;
+        };
         const currentRunId = ctx.ledger.currentSeed;
         switch (ticket.scene) {
         case 'revive': {
             if (currentRunId !== ticket.runId) return { applied: false, reason: 'staleRun' };
             if (!ctx.core.revive()) return { applied: false, reason: 'invalidState' };
             ctx.ledger.noteRevive();
-            return { applied: true };
+            return finish({ applied: true });
         }
 
         case 'doubleCoins': {
@@ -134,7 +142,7 @@ export class AdRewardCoordinator {
             if (bonus <= 0) return { applied: false, reason: 'zeroBonus' };
             const granted = ctx.economy.grant(txId, bonus);
             return granted > 0
-                ? { applied: true, bonus: granted }
+                ? finish({ applied: true, bonus: granted })
                 : { applied: false, reason: 'duplicateTx' };
         }
 
@@ -151,7 +159,7 @@ export class AdRewardCoordinator {
             }
             const granted = ctx.economy.grant(`addaily:${dailyDate}:${dailyQuestId}`, dailyReward);
             return granted > 0
-                ? { applied: true, bonus: granted }
+                ? finish({ applied: true, bonus: granted })
                 : { applied: false, reason: 'duplicateTx' };
         }
 
@@ -161,14 +169,14 @@ export class AdRewardCoordinator {
                 magnetT: Math.max(this.pendingBuffs?.magnetT ?? 0, buffs.magnetT ?? 0),
                 dashT: Math.max(this.pendingBuffs?.dashT ?? 0, buffs.dashT ?? 0),
             };
-            return { applied: true };
+            return finish({ applied: true });
         }
 
         case 'skinTrial': {
             const trialSkinId = ticket.snapshot.trialSkinId;
             if (!trialSkinId) return { applied: false, reason: 'invalidSnapshot' };
             this.pendingTrialSkinId = trialSkinId;
-            return { applied: true, trialSkinId };
+            return finish({ applied: true, trialSkinId });
         }
         }
     }

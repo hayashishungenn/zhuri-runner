@@ -144,7 +144,8 @@ describe('Phase 8.1 缺陷最小复现', () => {
         expect(c.runTime).toBe(0);
         expect(c.fixedTick).toBe(0);
         expect(c.mapGen.difficulty).toBe(0);
-        expect(c.drainEvents()).toHaveLength(0);
+        // 不得残留上一局的 milestone 等过期事件（仅允许新局 runStart）
+        expect(c.drainEvents().every((e) => e.type === 'runStart')).toBe(true);
         for (let i = 0; i < 120; i++) c.update(1 / 60);
         const snap2 = { dist: c.dist, obs: c.obstacles.map((o) => ({ defId: o.defId, lane: o.lane, z: o.z })) };
         expect(snap2).toEqual(snap1);

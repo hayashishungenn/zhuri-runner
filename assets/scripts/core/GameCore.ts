@@ -17,49 +17,58 @@ import { GameConfig, ThemeCfg } from '../config/GameConfigSchema';
 import { ObstacleCatalog, ObstacleDef, defaultCatalog } from '../config/ObstacleCatalog';
 import { validateReachability, abilityForSpeed, ObstacleEvent } from './Reachability';
 import { Rng, SeededRng, RNG_STREAM, deriveSeed } from './rng';
+import { SimulationClock } from './SimulationClock';
+import { COLLISION_GEOM, evaluateObstacleSweep, evaluatePickupSweep, jumpHeightAt } from './CollisionSystem';
 import {
     Obstacle, ItemKind, ItemEntity, Fragment, Prop, GameState, CoreEvent,
-    RunModeOverrides, StartRunOptions,
+    RunModeOverrides, StartRunOptions, CoreCommand, ReadonlyCoreView, CoreResourceStats,
 } from './types';
 import { MapGenerator, Corner } from './MapGenerator';
 
 export class GameCore {
-    /** 固定逻辑步长（60 Hz） */
-    static readonly FIXED_DT = 1 / 60;
-    /** 单帧输入 dt 上限（后台恢复/卡顿防护，防时间螺旋） */
-    static readonly MAX_FRAME_DT = 0.25;
-    /** 单次 update 最大逻辑子步数 */
-    static readonly MAX_SUB_STEPS = 8;
+    /** 固定逻辑步长（60 Hz，代理自 SimulationClock） */
+    static readonly FIXED_DT = SimulationClock.FIXED_DT;
+    /** 单帧输入 dt 上限（代理自 SimulationClock） */
+    static readonly MAX_FRAME_DT = SimulationClock.MAX_FRAME_DT;
+    /** 单次 update 最大逻辑子步数（代理自 SimulationClock） */
+    static readonly MAX_SUB_STEPS = SimulationClock.MAX_SUB_STEPS;
 
-    /** 连续碰撞几何常量（车道单位：相邻车道中心间距 = 1.0） */
-    static readonly PLAYER_HALF_WIDTH = 0.22;
-    static readonly OBS_HALF_WIDTH = 0.30;
-    static readonly PICKUP_HALF_WIDTH = 0.55;
-    static readonly PLAYER_STAND_HEIGHT = 1.8;
-    static readonly PLAYER_SLIDE_HEIGHT = 0.75;
-    static readonly JUMP_HEIGHT_BASE = 2.0;
-    static readonly JUMP_HEIGHT_LEAP = 2.5;
-    static readonly OBS_HIT_Z_BACK = -0.35;
-    /** 跳跃安全净空高度（与 jumpSafeFrom=0.12 / jumpSafeTo=0.88 高度 sin(0.12π)*2 ≈ 0.736 对齐） */
-    static readonly JUMP_CLEAR_HEIGHT = 0.73;
+    /** 连续碰撞几何常量（代理自 CollisionSystem，与碰撞和可达性同源） */
+    static readonly PLAYER_HALF_WIDTH = COLLISION_GEOM.PLAYER_HALF_WIDTH;
+    static readonly OBS_HALF_WIDTH = COLLISION_GEOM.OBS_HALF_WIDTH;
+    static readonly PICKUP_HALF_WIDTH = COLLISION_GEOM.PICKUP_HALF_WIDTH;
+    static readonly PLAYER_STAND_HEIGHT = COLLISION_GEOM.PLAYER_STAND_HEIGHT;
+    static readonly PLAYER_SLIDE_HEIGHT = COLLISION_GEOM.PLAYER_SLIDE_HEIGHT;
+    static readonly JUMP_HEIGHT_BASE = COLLISION_GEOM.JUMP_HEIGHT_BASE;
+    static readonly JUMP_HEIGHT_LEAP = COLLISION_GEOM.JUMP_HEIGHT_LEAP;
+    static readonly OBS_HIT_Z_BACK = COLLISION_GEOM.OBS_HIT_Z_BACK;
+    static readonly JUMP_CLEAR_HEIGHT = COLLISION_GEOM.JUMP_CLEAR_HEIGHT;
 
     readonly cfg: GameConfig;
 
-    // ---- 固定时间步与插值状态 ----
-    fixedTick = 0;
-    private simAccumulator = 0;
-    /** 渲染插值因子 [0, 1) */
-    renderAlpha = 0;
+    // ---- 固定时间步与时钟管理（SimulationClock 唯一持有） ----
+    readonly clock = new SimulationClock();
+    get fixedTick(): number { return this.clock.fixedTick; }
+    set fixedTick(v: number) { this.clock.fixedTick = v; }
+    get gTime(): number { return this.clock.gTime; }
+    set gTime(v: number) { this.clock.gTime = v; }
+    get runTime(): number { return this.clock.runTime; }
+    set runTime(v: number) { this.clock.runTime = v; }
+    get renderAlpha(): number { return this.clock.renderAlpha; }
+    set renderAlpha(v: number) { this.clock.renderAlpha = v; }
+    get paused(): boolean { return this.clock.paused; }
+    set paused(v: boolean) { this.clock.paused = v; }
+
     prevDist = 0;
     prevPlayerLaneF = 0;
     prevJumpT = -1;
     /** 可选逻辑帧前采样钩子（用于确定性回放或固定步长输入消费） */
     onBeforeStep: ((core: GameCore) => void) | null = null;
+    private commandQueue: CoreCommand[] = [];
+    private lastEmittedThemeIdx = 0;
 
-    // ---- 运行时状态（渲染器只读） ----
+    // ---- 运行时状态（渲染器通过 core.view 只读访问） ----
     state: GameState = 'title';
-    gTime = 0;              // 全局逻辑时钟（贯穿标题/死亡，驱动天色与虚线动画）
-    runTime = 0;            // 单局逻辑时钟（每次 startRun 归零，驱动 timing 障碍等单局规则，保证同种子完全可复现）
     timeScale = 1;          // 慢动作系数
     dist = 0;               // 逻辑距离（绝对路径位置，里 = dist * liScale）
     frags = 0;              // 阳炎计数
@@ -73,7 +82,6 @@ export class GameCore {
     reviveUsed = false;
     milestone: number;
     dieTimer = -1;
-    paused = false;         // 暂停（仅 run 状态可暂停；冻结整帧推进）
     stumbleTimer = 0;       // 踉跄剩余时间（>0 即踉跄中）
 
     obstacles: Obstacle[] = [];
@@ -173,16 +181,56 @@ export class GameCore {
     }
 
     /** 玩家当前离地高度（连续） */
-    get playerY(): number { return this.jumpHeightAt(this.jumpT); }
+    get playerY(): number { return jumpHeightAt(this.jumpT, this.leapT > 0); }
     /** 玩家当前身高（站立 1.8 / 滑铲 0.75） */
-    get playerHeight(): number { return this.slideT >= 0 ? GameCore.PLAYER_SLIDE_HEIGHT : GameCore.PLAYER_STAND_HEIGHT; }
+    get playerHeight(): number { return this.slideT >= 0 ? COLLISION_GEOM.PLAYER_SLIDE_HEIGHT : COLLISION_GEOM.PLAYER_STAND_HEIGHT; }
     /** 本局是否全程未触发过热警戒 */
     get isCoolRun(): boolean { return this.maxHeat < this.cfg.heat.warnAt; }
 
-    private jumpHeightAt(jt: number): number {
-        if (jt < 0 || jt >= 1) return 0;
-        const peak = this.leapT > 0 ? GameCore.JUMP_HEIGHT_LEAP : GameCore.JUMP_HEIGHT_BASE;
-        return Math.sin(jt * Math.PI) * peak;
+    /** 只读视图（零深拷贝，供渲染层/HUD/统计只读消费） */
+    get view(): ReadonlyCoreView { return this; }
+
+    /** 开发期核心逻辑资源计数（用于长跑/重开内存与对象有界观测） */
+    getResourceStats(): CoreResourceStats {
+        return {
+            segments: this.mapGen.path.segments.length,
+            corners: this.mapGen.corners.length,
+            obstacles: this.obstacles.length,
+            fragments: this.fragments.length,
+            items: this.items.length,
+            props: this.props.length,
+            pendingEvents: this.events.length,
+            queuedCommands: this.commandQueue.length,
+        };
+    }
+
+    /** 统一事件发射器：自动附加 runId 与逻辑帧 tick */
+    private emit(ev: CoreEvent): void {
+        this.events.push({ ...ev, runId: this.runSeed, tick: this.fixedTick });
+    }
+
+    /** 提交输入命令至逻辑帧队列（在下一个固定逻辑步首消费；用于统一输入与确定性回放） */
+    enqueueCommand(cmd: CoreCommand): void {
+        this.commandQueue.push(cmd);
+    }
+
+    /** 立即执行单条核心命令 */
+    applyCommand(cmd: CoreCommand): void {
+        switch (cmd.type) {
+        case 'lane': this.doLane(cmd.dir); break;
+        case 'jump': this.doJump(); break;
+        case 'slide': this.doSlide(); break;
+        case 'turn': this.tryTurn(cmd.dir); break;
+        case 'pause': this.pause(); break;
+        case 'resume': this.resume(); break;
+        }
+    }
+
+    private flushCommands(): void {
+        if (!this.commandQueue.length) return;
+        const cmds = this.commandQueue;
+        this.commandQueue = [];
+        for (const cmd of cmds) this.applyCommand(cmd);
     }
 
     private initRngStreams(seed: number): void {
@@ -291,8 +339,7 @@ export class GameCore {
 
     /** 后台恢复时清空未消费的帧时间累加器，防止切回前台瞬间爆发追帧 */
     onBackgroundResume(): void {
-        this.simAccumulator = 0;
-        this.renderAlpha = 0;
+        this.clock.onBackgroundResume();
     }
 
     // ---------- 流程 ----------
@@ -310,17 +357,28 @@ export class GameCore {
             }
         }
         this.state = 'run';
+        this.emit({ type: 'runStart' });
+    }
+
+    /** 返回主菜单（标题态）：重置单局覆写与运行态 */
+    returnToTitle(): void {
+        this.setRunOverrides(null);
+        this.reset();
+        this.state = 'title';
     }
 
     /** 暂停（仅 run 状态；冻结整帧推进，gTime 一并冻结） */
     pause() {
-        if (this.state === 'run') this.paused = true;
+        if (this.state === 'run' && !this.clock.paused) {
+            this.clock.pause();
+            this.emit({ type: 'pause' });
+        }
     }
 
     resume() {
-        if (this.state === 'run') {
-            this.paused = false;
-            this.simAccumulator = 0;
+        if (this.state === 'run' && this.clock.paused) {
+            this.clock.resume();
+            this.emit({ type: 'resume' });
         }
     }
 
@@ -346,14 +404,14 @@ export class GameCore {
         if (dir === this.turnWindow.dir) {
             if (c) c.passed = true;
             this.cornersPassed++;
-            this.events.push({ type: 'turnOk' });
+            this.emit({ type: 'turnOk' });
             this.turnWindow = null;
             return true;
         }
         // 转错方向：标记该路口已结束，清空窗口，冲出跑道
         if (c) c.passed = true;
         this.turnWindow = null;
-        this.events.push({ type: 'turnMiss' });
+        this.emit({ type: 'turnMiss' });
         this.crash();
         return false;
     }
@@ -380,22 +438,21 @@ export class GameCore {
         this.slowTimer = 0; this.slowFactor = 1;
         this.jumpT = -1; this.slideT = -1;
         this.dieTimer = -1;
-        this.simAccumulator = 0;
-        this.renderAlpha = 0;
+        this.clock.onBackgroundResume();
         this.prevDist = this.dist;
         this.prevPlayerLaneF = this.playerLaneF;
         this.prevJumpT = -1;
         this.state = 'run';
         this.timeScale = 1;
+        this.emit({ type: 'revive' });
         return true;
     }
 
     private reset(seed?: number) {
         const c = this.cfg;
-        this.fixedTick = 0;
-        this.simAccumulator = 0;
-        this.renderAlpha = 0;
-        this.runTime = 0;
+        this.clock.resetRun();
+        this.commandQueue = [];
+        this.lastEmittedThemeIdx = 0;
         this.playerLaneF = 0; this.targetLane = 0;
         this.prevDist = 0; this.prevPlayerLaneF = 0; this.prevJumpT = -1;
         this.jumpT = -1; this.slideT = -1; this.runPhase = 0;
@@ -407,7 +464,6 @@ export class GameCore {
         this.dieTimer = -1;
         this.reviveUsed = false; this.invincible = 0;
         this.milestone = c.milestone.step; this.timeScale = 1;
-        this.paused = false;
         this.stumbleTimer = 0;
         this.slowFactor = 1; this.slowTimer = 0;
         this.items = [];
@@ -451,7 +507,7 @@ export class GameCore {
         if (this.jumpT < 0) {
             this.jumpT = 0;
             this.slideT = -1;          // 起跳取消滑铲
-            this.events.push({ type: 'jump' });
+            this.emit({ type: 'jump' });
         }
     }
     doSlide() {
@@ -459,42 +515,24 @@ export class GameCore {
         if (this.jumpT >= 0) this.jumpT = this.cfg.player.diveJumpTo;
         const wasSliding = this.slideT >= 0;
         this.slideT = this.cfg.player.slideDuration;
-        if (!wasSliding) this.events.push({ type: 'slideStart' });
+        if (!wasSliding) this.emit({ type: 'slideStart' });
     }
 
-    // ---------- 固定时间步长主循环 ----------
+    // ---------- 固定时间步长主循环（委托 SimulationClock） ----------
     update(dtRaw: number) {
-        if (this.paused) return;
-        if (!Number.isFinite(dtRaw) || dtRaw <= 0) return;
-        const clamped = Math.min(dtRaw, GameCore.MAX_FRAME_DT);
-        this.simAccumulator += clamped;
-
-        const STEP = GameCore.FIXED_DT;
-        const EPS = 1e-9;
-        let steps = 0;
-        while (this.simAccumulator + EPS >= STEP && steps < GameCore.MAX_SUB_STEPS) {
-            this.simAccumulator = Math.max(0, this.simAccumulator - STEP);
-            this.stepFixed(STEP);
-            steps++;
-            if (this.paused) break;
-        }
-        if (steps === GameCore.MAX_SUB_STEPS && this.simAccumulator > STEP) {
-            this.simAccumulator = STEP * 0.999;
-        }
-        this.renderAlpha = Math.max(0, Math.min(1, this.simAccumulator / STEP));
+        this.clock.advance(dtRaw, (dt) => this.stepFixed(dt));
     }
 
     /** 单次固定逻辑步推进（确定性核心） */
     private stepFixed(dt: number) {
         if (this.onBeforeStep) this.onBeforeStep(this);
+        this.flushCommands();
         this.prevDist = this.dist;
         this.prevPlayerLaneF = this.playerLaneF;
         this.prevJumpT = this.jumpT;
 
-        this.fixedTick++;
-        this.gTime += dt;
         if (this.state === 'run') {
-            this.runTime += dt * this.timeScale;
+            this.clock.advanceRunTime(dt * this.timeScale);
             this.updateRun(dt * this.timeScale);
             if ((this.state as GameState) !== 'dying') {
                 this.recoverTimeScale(dt, this.cfg.death.ambientRecover);
@@ -562,8 +600,14 @@ export class GameCore {
 
         // 单帧跨越多个里程碑逐次补发
         while (this.li >= this.milestone) {
-            this.events.push({ type: 'milestone', n: this.milestone });
+            this.emit({ type: 'milestone', n: this.milestone });
             this.milestone += c.milestone.step;
+        }
+        // 主题切换事件（领域事件唯一真源）
+        const curTheme = this.themeIdx;
+        if (curTheme !== this.lastEmittedThemeIdx) {
+            this.lastEmittedThemeIdx = curTheme;
+            this.emit({ type: 'themeChange', themeIdx: curTheme });
         }
         // 征途阶段与通关（仅征途模式）
         if (this.mode === 'journey') {
@@ -571,12 +615,12 @@ export class GameCore {
             while (this.journeyStage < stages.length && this.li >= stages[this.journeyStage].goalLi) {
                 const st = stages[this.journeyStage];
                 this.journeyStage++;
-                this.events.push({ type: 'stage', n: this.journeyStage, label: st.label });
+                this.emit({ type: 'stage', n: this.journeyStage, label: st.label });
             }
             if (this.journeyStage >= stages.length) {
                 this.state = 'ended';
                 this.turnWindow = null;
-                this.events.push({ type: 'journeyDone' });
+                this.emit({ type: 'journeyDone' });
                 return;
             }
         }
@@ -587,7 +631,7 @@ export class GameCore {
         this.playerLaneF += (this.targetLane - this.playerLaneF) * Math.min(1, dt * c.player.laneLerp);
         if (this.jumpT >= 0) {
             this.jumpT += dt / this.jumpDurNow;
-            if (this.jumpT >= 1) { this.jumpT = -1; this.events.push({ type: 'land' }); }
+            if (this.jumpT >= 1) { this.jumpT = -1; this.emit({ type: 'land' }); }
         }
         if (this.slideT >= 0) { this.slideT -= dt; if (this.slideT < 0) this.slideT = -1; }
         this.runPhase += dt * (6 + spd * 0.35);
@@ -595,11 +639,8 @@ export class GameCore {
         // 地图生成难度联动（转弯频率随难度提升）
         this.mapGen.difficulty = this.difficulty;
 
-        // ---- 障碍推进 + 连续扫描碰撞判定 ----
+        // ---- 障碍推进 + 连续扫描碰撞判定（委托 CollisionSystem） ----
         const hitZFront = c.obstacle.hitZ;
-        const hitZBack = GameCore.OBS_HIT_Z_BACK;
-        const lateralThreshold = GameCore.PLAYER_HALF_WIDTH + GameCore.OBS_HALF_WIDTH;
-
         for (let i = this.obstacles.length - 1; i >= 0; i--) {
             const o = this.obstacles[i];
             const prevZ = o.z;
@@ -609,79 +650,68 @@ export class GameCore {
 
             const def = this.defOf(o);
             if (def.pass === 'timing') this.obstacleLanes(o);
+            if (o.passed) continue;
 
-            // 连续扫描区间 [currZ, prevZ] 与碰撞区间 [hitZBack, hitZFront] 相交
-            if (!o.passed && currZ <= hitZFront && prevZ >= hitZBack) {
-                o.passed = true;
-                // 计算穿过 hitZFront 的插值时刻 t ∈ [0, 1]
-                const dz = prevZ - currZ;
-                const t = dz > 1e-6 ? Math.max(0, Math.min(1, (prevZ - hitZFront) / dz)) : 1;
-                const laneAtT = prevLaneF + (this.playerLaneF - prevLaneF) * t;
-                const jumpAtT = (prevJumpT >= 0 && this.jumpT >= 0)
-                    ? prevJumpT + (this.jumpT - prevJumpT) * t
-                    : (this.jumpT >= 0 ? this.jumpT : prevJumpT);
-                const slideAtT = prevSlideT >= 0 || this.slideT >= 0;
+            const lanes = this.obstacleLanes(o);
+            const effPass = (def.pass === 'timing' ? (def.rollSpeed ? 'jump' : 'lane') : def.pass) as 'jump' | 'slide' | 'lane';
+            const sweep = evaluateObstacleSweep({
+                prevZ, currZ, hitZFront,
+                prevLaneF, currLaneF: this.playerLaneF,
+                prevJumpT, currJumpT: this.jumpT,
+                prevSlideT, currSlideT: this.slideT,
+                jumpSafeFrom: c.player.jumpSafeFrom,
+                jumpSafeTo: c.player.jumpSafeTo,
+                leapActive: this.leapT > 0,
+                effPass,
+                lanes,
+                continuousLane: def.rollSpeed ? o.visLane : undefined,
+            });
+            if (!sweep.crossed) continue;
 
-                const lanes = this.obstacleLanes(o);
-                const lateralHit = (def.rollSpeed && o.visLane !== undefined)
-                    ? Math.abs(laneAtT - o.visLane) < lateralThreshold
-                    : lanes.some((l) => Math.abs(laneAtT - l) < lateralThreshold);
+            o.passed = true;
+            const { lateralHit, safe } = sweep;
 
-                const jumping = jumpAtT >= 0
-                    && jumpAtT > c.player.jumpSafeFrom
-                    && jumpAtT < c.player.jumpSafeTo
-                    && this.jumpHeightAt(jumpAtT) >= GameCore.JUMP_CLEAR_HEIGHT;
-                const sliding = slideAtT;
-
-                const effPass = def.pass === 'timing' ? (def.rollSpeed ? 'jump' : 'lane') : def.pass;
-                let safe = !lateralHit;
-                if (lateralHit) {
-                    if (effPass === 'jump') safe = jumping;
-                    else if (effPass === 'slide') safe = sliding;
-                }
-
-                // 桃木神杖：仅非无敌期撞上切道/时机类障碍时消耗 1 层将其击碎（避免冲刺/复活无敌期误耗）
-                if (!safe && this.invincible <= 0 && this.staffCharges > 0 && (def.pass === 'lane' || def.pass === 'timing')) {
-                    this.staffCharges--;
-                    this.invincible = Math.max(this.invincible, 0.8);
+            // 桃木神杖：仅非无敌期撞上切道/时机类障碍时消耗 1 层将其击碎
+            if (!safe && this.invincible <= 0 && this.staffCharges > 0 && (def.pass === 'lane' || def.pass === 'timing')) {
+                this.staffCharges--;
+                this.invincible = Math.max(this.invincible, 0.8);
+                o.z = -3;
+                this.emit({ type: 'staffBreak' });
+                continue;
+            }
+            if (!safe && this.invincible <= 0 && this.shieldCharges > 0) {
+                this.shieldCharges--;
+                this.invincible = Math.max(this.invincible, 1.2);
+                o.z = -3;
+                this.emit({ type: 'shieldBreak' });
+                continue;
+            }
+            if (!safe && this.invincible <= 0) {
+                const canStumble = c.player.stumble.enabled && def.damage === 'stumble' && !this.stumbling;
+                if (canStumble) {
+                    this.stumbleTimer = c.player.stumble.duration;
+                    this.invincible = c.player.stumble.mercyInvincible;
+                    this.applySlowdown(c.player.stumble.speedFactor, c.player.stumble.duration);
                     o.z = -3;
-                    this.events.push({ type: 'staffBreak' });
-                    continue;
+                    this.emit({ type: 'stumble' });
+                } else {
+                    this.crash();
+                    return;
                 }
-                if (!safe && this.invincible <= 0 && this.shieldCharges > 0) {
-                    this.shieldCharges--;
-                    this.invincible = Math.max(this.invincible, 1.2);
-                    o.z = -3;
-                    this.events.push({ type: 'shieldBreak' });
-                    continue;
-                }
-                if (!safe && this.invincible <= 0) {
-                    const canStumble = c.player.stumble.enabled && def.damage === 'stumble' && !this.stumbling;
-                    if (canStumble) {
-                        this.stumbleTimer = c.player.stumble.duration;
-                        this.invincible = c.player.stumble.mercyInvincible;
-                        this.applySlowdown(c.player.stumble.speedFactor, c.player.stumble.duration);
-                        o.z = -3;
-                        this.events.push({ type: 'stumble' });
-                    } else {
-                        this.crash();
-                        return;
-                    }
-                }
-                if (!safe && this.invincible > 0 && o.z !== -3) {
-                    o.z = -3;
-                    this.events.push({ type: 'obstacleSmashed' });
-                } else if (safe && lateralHit) {
-                    this.events.push({ type: 'obstaclePassed' });
-                    if (def.vis === 'water') {
-                        this.heat = Math.max(0, this.heat - c.heat.streamReduce);
-                        this.events.push({ type: 'cool', amount: c.heat.streamReduce });
-                    }
+            }
+            if (!safe && this.invincible > 0 && o.z !== -3) {
+                o.z = -3;
+                this.emit({ type: 'obstacleSmashed' });
+            } else if (safe && lateralHit) {
+                this.emit({ type: 'obstaclePassed' });
+                if (def.vis === 'water') {
+                    this.heat = Math.max(0, this.heat - c.heat.streamReduce);
+                    this.emit({ type: 'cool', amount: c.heat.streamReduce });
                 }
             }
         }
 
-        // ---- 道具拾取（扫描区间防高速穿透）----
+        // ---- 道具拾取（委托 CollisionSystem 连续扫描）----
         const pickFrom = c.obstacle.pickupZFrom;
         const pickTo = c.obstacle.pickupZTo;
         for (let i = this.items.length - 1; i >= 0; i--) {
@@ -690,17 +720,15 @@ export class GameCore {
             it.z -= spd * dt;
             const currZ = it.z;
             if (currZ < c.world.despawnZ) { this.items.splice(i, 1); continue; }
-            if (!it.got && currZ <= pickTo && prevZ >= pickFrom) {
-                const dz = prevZ - currZ;
-                const midZ = (pickFrom + pickTo) * 0.5;
-                const t = dz > 1e-6 ? Math.max(0, Math.min(1, (prevZ - midZ) / dz)) : 1;
-                const laneAtT = prevLaneF + (this.playerLaneF - prevLaneF) * t;
-                if (Math.abs(laneAtT - it.lane) <= GameCore.PICKUP_HALF_WIDTH) {
-                    it.got = true;
-                    this.pickItem(it.kind);
-                    this.events.push({ type: 'item', kind: it.kind, lane: it.lane });
-                    this.items.splice(i, 1);
-                }
+            if (!it.got && evaluatePickupSweep({
+                prevZ, currZ, pickFrom, pickTo,
+                prevLaneF, currLaneF: this.playerLaneF,
+                targetLane: it.lane,
+            })) {
+                it.got = true;
+                this.pickItem(it.kind);
+                this.emit({ type: 'item', kind: it.kind, lane: it.lane });
+                this.items.splice(i, 1);
             }
         }
 
@@ -712,24 +740,22 @@ export class GameCore {
             }
         }
 
-        // ---- 阳炎拾取（扫描区间防高速穿透）----
+        // ---- 阳炎拾取（委托 CollisionSystem 连续扫描）----
         for (let i = this.fragments.length - 1; i >= 0; i--) {
             const f = this.fragments[i];
             const prevZ = f.z;
             f.z -= spd * dt;
             const currZ = f.z;
             if (currZ < c.world.despawnZ) { this.fragments.splice(i, 1); continue; }
-            if (!f.got && currZ <= pickTo && prevZ >= pickFrom) {
-                const dz = prevZ - currZ;
-                const midZ = (pickFrom + pickTo) * 0.5;
-                const t = dz > 1e-6 ? Math.max(0, Math.min(1, (prevZ - midZ) / dz)) : 1;
-                const laneAtT = prevLaneF + (this.playerLaneF - prevLaneF) * t;
-                if (Math.abs(laneAtT - f.lane) <= GameCore.PICKUP_HALF_WIDTH) {
-                    f.got = true;
-                    const amount = this.doubleT > 0 ? 2 : 1;
-                    this.frags += amount;
-                    this.events.push({ type: 'fragment', lane: f.lane, amount });
-                }
+            if (!f.got && evaluatePickupSweep({
+                prevZ, currZ, pickFrom, pickTo,
+                prevLaneF, currLaneF: this.playerLaneF,
+                targetLane: f.lane,
+            })) {
+                f.got = true;
+                const amount = this.doubleT > 0 ? 2 : 1;
+                this.frags += amount;
+                this.emit({ type: 'fragment', lane: f.lane, amount });
             }
         }
 
@@ -762,7 +788,7 @@ export class GameCore {
                 // 错过转弯：标记路口已结束，清空窗口，触发死亡（复活后不再被旧路口阻塞）
                 if (corner) corner.passed = true;
                 this.turnWindow = null;
-                this.events.push({ type: 'turnMiss' });
+                this.emit({ type: 'turnMiss' });
                 this.crash();
             }
             return;
@@ -780,7 +806,7 @@ export class GameCore {
         this.dieTimer -= dt * c.dieRate;
         if (this.dieTimer <= 0) {
             this.state = 'dead';
-            this.events.push({ type: 'died' });
+            this.emit({ type: 'died' });
         }
     }
 
@@ -790,7 +816,7 @@ export class GameCore {
         this.turnWindow = null;
         this.dieTimer = this.cfg.death.dieDelay;
         this.timeScale = this.cfg.death.slowmo;
-        this.events.push({ type: 'crash' });
+        this.emit({ type: 'crash' });
     }
 
     // ---------- 生成 ----------
@@ -1031,7 +1057,7 @@ export class GameCore {
             this.slowTimer = 0; this.slowFactor = 1;
             this.heat = Math.max(0, this.heat - (this.cfg.heat.waterReduce + this.mods.waterReduceBonus));
             this.lastWaterD = this.dist;
-            this.events.push({ type: 'water' });
+            this.emit({ type: 'water' });
             break;
         case 'staff':
             this.staffCharges = Math.min(this.staffCharges + 3, 6 + this.mods.staffCapBonus);
