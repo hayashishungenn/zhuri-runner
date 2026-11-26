@@ -10,6 +10,7 @@ import { ObstacleCatalog, ObstacleDef, defaultCatalog } from '../config/Obstacle
 import { validateReachability, abilityForSpeed } from './Reachability';
 import { SystemRng, Rng } from './rng';
 import { Obstacle, ItemKind, ItemEntity, Fragment, Prop, GameState, CoreEvent } from './types';
+import { ThemeCfg } from '../config/GameConfigSchema';
 import { MapGenerator, Corner } from './MapGenerator';
 
 export class GameCore {
@@ -44,6 +45,14 @@ export class GameCore {
     dashT = 0;              // 冲刺剩余（冲刺期间无敌）
     doubleT = 0;            // 倍率剩余
     shieldCharges = 0;      // 护盾层数（0/1）
+    staffCharges = 0;       // 桃木神杖层数（破坏切道/时机类障碍，0-6）
+    leapT = 0;              // 巨人之跃剩余（跳跃更久更高）
+    // ---- Phase 4 高温与逐日 ----
+    heat = 0;               // 热量 [0,100]（100 不死：强制减速 maxSlow）
+    lastWaterD = 0;         // 上次饮水资源出现/拾取的里程（保底用）
+    // ---- Phase 4 游戏模式与征途 ----
+    mode: 'endless' | 'journey' = 'endless';
+    journeyStage = 0;       // 已完成的征途阶段数
     /** 当前难度 [0,1]（里程驱动，封顶） */
     get difficulty(): number { return Math.min(this.li / this.cfg.difficulty.rampLi, 1); }
 
@@ -56,7 +65,7 @@ export class GameCore {
     private lastWaveEvents: { d: number; lanes: number[]; pass: 'jump' | 'slide' | 'lane' }[] = [];
     /** 可达性验证统计（管线证据：validated 含与上一波合并的联合验证） */
     readonly waveStats = { validated: 0, rejected: 0 };
-    readonly spawnDebug = { calls: 0, zoneBlocks: 0, patternSpawned: 0, fallbackSpawned: 0, fullRejects: 0, fragRows: 0, fragLanes: [] as number[] };
+    readonly spawnDebug = { calls: 0, zoneBlocks: 0, patternSpawned: 0, fallbackSpawned: 0, fullRejects: 0, fragRows: 0, fragLanes: [] as number[], itemCount: 0, pityFires: 0 };
 
     // ---- Phase 2：无限地图与转弯 ----
     readonly mapGen: MapGenerator;
@@ -69,8 +78,9 @@ export class GameCore {
     readonly catalog: ObstacleCatalog;
     private defMap = new Map<string, ObstacleDef>();
 
-    constructor(cfg: GameConfig, rng?: Rng, opts?: { turnsEnabled?: boolean; catalog?: ObstacleCatalog }) {
+    constructor(cfg: GameConfig, rng?: Rng, opts?: { turnsEnabled?: boolean; catalog?: ObstacleCatalog; mode?: 'endless' | 'journey' }) {
         this.cfg = cfg;
+        if (opts?.mode) this.mode = opts.mode;
         this.rng = rng ?? new SystemRng();
         this.speed = cfg.speed.base;
         this.milestone = cfg.milestone.step;
@@ -135,10 +145,32 @@ export class GameCore {
     get airborne(): boolean { return this.jumpT >= 0; }
     /** 踉跄中（受击后的减速与濒危窗口） */
     get stumbling(): boolean { return this.stumbleTimer > 0; }
-    /** 实际推进速度 = 速度公式 × 减速倍率 ×（冲刺 1.5） */
+    /** 实际推进速度 = 速度公式 × 减速倍率 ×（冲刺 1.5）×（热满减速） */
     get effectiveSpeed(): number {
         const base = this.speed * (this.slowTimer > 0 ? this.slowFactor : 1);
-        return this.dashT > 0 ? base * 1.5 : base;
+        const dashed = this.dashT > 0 ? base * 1.5 : base;
+        return this.heat >= this.cfg.heat.warnAt ? dashed * this.cfg.heat.maxSlow : dashed;
+    }
+
+    /** 当前跳跃时长（巨人之跃期间 ×1.35：更久更高，跨越能力提升） */
+    get jumpDurNow(): number {
+        return this.cfg.player.jumpDuration * (this.leapT > 0 ? 1.35 : 1);
+    }
+
+    /** 当前主题配置（按路径所在地块的主题索引） */
+    get themeNow(): ThemeCfg {
+        const seg = this.mapGen.path.segmentAt(this.dist);
+        const list = this.cfg.themes;
+        return list[seg.theme % list.length];
+    }
+
+    /** 逐日进度 [0,1]：无尽 = 里程/天空全程；征途 = 里程/最终目标 */
+    get sunProgress(): number {
+        if (this.mode === 'journey') {
+            const final = this.cfg.journey.stages[this.cfg.journey.stages.length - 1];
+            return Math.min(this.li / final.goalLi, 1);
+        }
+        return this.skyP;
     }
 
     drainEvents(): CoreEvent[] {
@@ -226,6 +258,9 @@ export class GameCore {
         this.slowFactor = 1; this.slowTimer = 0;
         this.items = [];
         this.magnetT = 0; this.dashT = 0; this.doubleT = 0; this.shieldCharges = 0;
+        this.staffCharges = 0; this.leapT = 0;
+        this.heat = 0; this.lastWaterD = 0;
+        this.journeyStage = 0;
         this.lastWaveEvents = [];
         // 无限地图：同种子重建（可复现）
         this.mapGen.reset();
@@ -297,20 +332,42 @@ export class GameCore {
         }
         if (this.magnetT > 0) { this.magnetT = Math.max(0, this.magnetT - dt); if (this.magnetT < 1e-9) this.magnetT = 0; }
         if (this.doubleT > 0) { this.doubleT = Math.max(0, this.doubleT - dt); if (this.doubleT < 1e-9) this.doubleT = 0; }
+        if (this.leapT > 0) { this.leapT = Math.max(0, this.leapT - dt); if (this.leapT < 1e-9) this.leapT = 0; }
         if (this.dashT > 0) {
             this.dashT = Math.max(0, this.dashT - dt);
             if (this.dashT < 1e-9) this.dashT = 0;
             this.invincible = Math.max(this.invincible, this.dashT);   // 冲刺期间无敌
         }
         this.dist += spd * dt;
+        // 高温：随难度与主题升温，封顶 100（永不致死——热满仅强制减速 maxSlow）
+        if (this.heat < 100) {
+            const themeMul = this.themeNow.heatMul;
+            this.heat = Math.min(100, this.heat + c.heat.baseRate * themeMul * (1 + c.heat.dScale * this.difficulty) * dt);
+        }
         if (this.li >= this.milestone) {
             this.events.push({ type: 'milestone', n: this.milestone });
             this.milestone += c.milestone.step;
         }
+        // 征途阶段与通关（仅征途模式）
+        if (this.mode === 'journey') {
+            const stages = c.journey.stages;
+            if (this.journeyStage < stages.length) {
+                const st = stages[this.journeyStage];
+                if (this.li >= st.goalLi) {
+                    this.journeyStage++;
+                    this.events.push({ type: 'stage', n: this.journeyStage, label: st.label });
+                    if (this.journeyStage >= stages.length) {
+                        this.state = 'ended';                       // 通关：逐日功成
+                        this.events.push({ type: 'journeyDone' });
+                        return;
+                    }
+                }
+            }
+        }
         if (this.invincible > 0) this.invincible -= dt;
         this.playerLaneF += (this.targetLane - this.playerLaneF) * Math.min(1, dt * c.player.laneLerp);
         if (this.jumpT >= 0) {
-            this.jumpT += dt / c.player.jumpDuration;
+            this.jumpT += dt / this.jumpDurNow;
             if (this.jumpT >= 1) { this.jumpT = -1; this.events.push({ type: 'land' }); }
         }
         if (this.slideT >= 0) { this.slideT -= dt; if (this.slideT < 0) this.slideT = -1; }
@@ -345,6 +402,14 @@ export class GameCore {
                 if (!lanes.includes(myLane)) safe = true;
                 else if (effPass === 'jump') safe = jumping;
                 else if (effPass === 'slide') safe = sliding;
+                // 桃木神杖：撞上切道/时机类障碍时消耗 1 层将其击碎（跳跃/滑铲类不适用——那些本可动作通过）
+                if (!safe && this.staffCharges > 0 && (def.pass === 'lane' || def.pass === 'timing')) {
+                    this.staffCharges--;
+                    this.invincible = Math.max(this.invincible, 0.8);
+                    o.z = -3;
+                    this.events.push({ type: 'staffBreak' });
+                    continue;
+                }
                 if (!safe && this.invincible <= 0 && this.shieldCharges > 0) {
                     // 护盾：抵挡一次任何撞击（含墙），击碎障碍 + 短无敌
                     this.shieldCharges--;
@@ -368,7 +433,14 @@ export class GameCore {
                     }
                 }
                 if (!safe && this.invincible > 0 && o.z !== -3) { o.z = -3; this.events.push({ type: 'obstacleSmashed' }); }
-                else if (safe && lanes.includes(myLane)) this.events.push({ type: 'obstaclePassed' });
+                else if (safe && lanes.includes(myLane)) {
+                    this.events.push({ type: 'obstaclePassed' });
+                    // 清凉水花：安全越过溪流降温（策略性：溪流由威胁变为资源）
+                    if (def.vis === 'water') {
+                        this.heat = Math.max(0, this.heat - c.heat.streamReduce);
+                        this.events.push({ type: 'cool', amount: c.heat.streamReduce });
+                    }
+                }
             }
         }
         // 道具拾取
@@ -489,7 +561,7 @@ export class GameCore {
      * 生成一波挑战：模板（组合）或随机单体；模板先经可达性验证（失败重掷，兜底单体）。
      * 生成避让：整波 + 碎片带需落在允许生成的直线段。
      */
-    /** @returns 是否实际生成了波（false = 安全区拦截，调用方应顺延重试） */
+    /** @returns 是否实际生成了波（false = 安全区拦截，调用方丢弃该波） */
     private spawnWave(): boolean {
         const c = this.cfg;
         this.spawnDebug.calls++;
@@ -521,6 +593,12 @@ export class GameCore {
                     lane: Math.max(-1, Math.min(1, anchor + st.lane)),
                     z: c.world.spawnZ + st.dz,
                 }));
+                // 波跨度安全区：最远步进也必须落在允许生成的直线段（模板可能跨 18+ 单位）
+                const maxDz = Math.max(...steps.map((st) => st.z));
+                if (!this.mapGen.path.isSafeSpawnZone(maxDz, 4)) {
+                    this.spawnDebug.zoneBlocks++;
+                    continue;
+                }
                 const newEvents = steps.map((st) => {
                     const def = this.defMap.get(st.defId)!;
                     // timing 障碍按"扫过车道并集"登记（摆动/滚石的实际威胁范围，保守最坏情形）
@@ -625,13 +703,19 @@ export class GameCore {
                 }
             }
         }
-        // ---- 道具（难度越高概率越大）----
-        const itemChance = this.catalog.spawn.itemChance * (1 + 0.6 * this.difficulty);
-        if (this.rng.next() < itemChance) {
+        // ---- 道具（难度越高概率越大；主题 itemMul 联动；高温饮水保底）----
+        const itemMul = this.themeNow.itemMul;
+        const itemChance = this.catalog.spawn.itemChance * (1 + 0.6 * this.difficulty) * itemMul;
+        const pityDue = this.heat >= c.heat.pityHeat && this.dist - this.lastWaterD > c.heat.pityDist;
+        if (this.rng.next() < itemChance || pityDue) {
             const fl = lanesFree.filter((l) => !usedLanes.includes(l));
             if (fl.length) {
-                const kind = this.weightedPick(this.catalog.items);
-                this.items.push({ kind: kind.id as ItemKind, lane: fl[Math.floor(this.rng.next() * fl.length)], z: c.world.spawnZ + 2, got: false });
+                // 保底：高温且久无饮水 → 强制甘霖（资源保底，杜绝随机缺水必然失败）
+                const kind: ItemKind = pityDue ? 'water' : this.weightedPick(this.catalog.items).id as ItemKind;
+                this.items.push({ kind, lane: fl[Math.floor(this.rng.next() * fl.length)], z: c.world.spawnZ + 2, got: false });
+                this.spawnDebug.itemCount++;
+                if (pityDue) this.spawnDebug.pityFires++;
+                if (kind === 'water') this.lastWaterD = this.dist;
             }
         }
         void placed;
@@ -648,8 +732,17 @@ export class GameCore {
         case 'dash': this.dashT = Math.max(this.dashT, dur); break;          // 替换剩余
         case 'shield': this.shieldCharges = Math.max(this.shieldCharges, 1); break;  // 不叠加
         case 'water':
-            this.stumbleTimer = 0;                                            // 即时：解除踉跄/减速
+            this.stumbleTimer = 0;                                            // 甘霖：解除踉跄/减速
             this.slowTimer = 0; this.slowFactor = 1;
+            this.heat = Math.max(0, this.heat - this.cfg.heat.waterReduce);   // 降温
+            this.lastWaterD = this.dist;                                      // 保底窗口重置
+            this.events.push({ type: 'water' });
+            break;
+        case 'staff':
+            this.staffCharges = Math.min(this.staffCharges + 3, 6);           // 桃木神杖：+3 层，上限 6
+            break;
+        case 'leap':
+            this.leapT = Math.max(this.leapT, dur);                           // 巨人之跃：同类延长
             break;
         }
     }

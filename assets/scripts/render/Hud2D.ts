@@ -8,7 +8,7 @@ import { GameCore } from '../core/GameCore';
 import { AdService } from '../platform/AdService';
 import { DESIGN_W, DESIGN_H, LX, LY } from './layout';
 
-export type HudButton = 'start' | 'revive' | 'restart' | 'mute' | 'pause' | 'resume';
+export type HudButton = 'start' | 'startJourney' | 'revive' | 'restart' | 'mute' | 'pause' | 'resume';
 
 /** P0 面板色板（美术常量，非玩法参数） */
 const C_MAIN = () => new Color(255, 207, 125, 255);
@@ -25,6 +25,7 @@ const HIT = {
     mute: { x0: 408, x1: 446, y0: 20, y1: 62 },
     pause: { x0: 356, x1: 394, y0: 20, y1: 62 },
     start: { x0: 80, x1: 370, y0: 440, y1: 482 },
+    startJourney: { x0: 80, x1: 370, y0: 488, y1: 532 },
     revive: { x0: 60, x1: 390, y0: 465, y1: 500 },
     restart: { x0: 60, x1: 390, y0: 525, y1: 560 },
 };
@@ -51,6 +52,12 @@ export class Hud2D {
     private lblAdN!: Label;
     private lblSpeed!: Label;
     private lblItems!: Label;
+    private lblHeat!: Label;
+    private lblJourney!: Label;
+    private lblBest!: Label;
+    private lblBtnJourney!: Label;
+    private lblEndedT!: Label;
+    private lblEndedS!: Label;
     private lblPaused!: Label;
     private lblResume!: Label;
     private lblRestart2!: Label;
@@ -127,6 +134,31 @@ export class Hud2D {
         const it = this.makeLabel(parent, 'hItems', 18, new Color(120, 200, 255, 255));
         this.lblItems = it.lbl;
         it.node.setPosition(LX(110), LY(60), 0);
+        // 热量（Phase 4）
+        const ht = this.makeLabel(parent, 'hHeat', 18, new Color(255, 150, 80, 255));
+        this.lblHeat = ht.lbl;
+        ht.node.setPosition(LX(160), LY(60), 0);
+        // 征途进度（Phase 4）
+        const jn = this.makeLabel(parent, 'hJourney', 16, new Color(255, 224, 160, 255));
+        this.lblJourney = jn.lbl;
+        jn.node.setPosition(0, LY(8), 0);
+        // 标题：最佳纪录
+        const bs = this.makeLabel(parent, 'tBest', 18, C_NOTE());
+        this.lblBest = bs.lbl;
+        bs.node.setPosition(0, LY(395), 0);
+        // 标题：征途模式按钮
+        const pj = this.makeLabel(parent, 'tBtnJ', 26, C_HINT());
+        pj.lbl.string = cfg.ui.modeJourney; this.lblBtnJourney = pj.lbl;
+        pj.node.setPosition(0, LY(510), 0);
+        // 胜利面板
+        const et = this.makeLabel(parent, 'eTitle', 48, lc);
+        et.lbl.string = cfg.ui.endedTitle; this.lblEndedT = et.lbl;
+        et.node.setPosition(0, LY(280), 0);
+        const es = this.makeLabel(parent, 'eSub', 20, C_PANEL_TXT());
+        es.lbl.string = cfg.ui.endedSub; this.lblEndedS = es.lbl;
+        es.node.setPosition(0, LY(345), 0);
+        this.lblEndedT.node.active = false;
+        this.lblEndedS.node.active = false;
 
         // 暂停面板
         const pt = this.makeLabel(parent, 'zTitle', 44, lc);
@@ -175,7 +207,10 @@ export class Hud2D {
                 if (inRect(HIT.restart)) return 'restart';
             } else if (inRect(HIT.pause)) return 'pause';
         }
-        if (core.state === 'title' && inRect(HIT.start)) return 'start';
+        if (core.state === 'title') {
+            if (inRect(HIT.start)) return 'start';
+            if (inRect(HIT.startJourney)) return 'startJourney';
+        }
         if (core.state === 'dead') {
             if (core.reviveUsable() && inRect(HIT.revive)) return 'revive';
             if (inRect(HIT.restart)) return 'restart';
@@ -184,6 +219,10 @@ export class Hud2D {
     }
 
     toggleMute(): boolean { this.muted = !this.muted; return this.muted; }
+
+    private bestLi = 0;
+    /** 标题显示无尽最佳纪录（Game 装配时注入；起跑刷新） */
+    setBestLi(v: number) { this.bestLi = Math.floor(v); }
     markFirstInput() { this.firstInput = true; }
 
     // ---------- 弹字 ----------
@@ -246,6 +285,44 @@ export class Hud2D {
         if (core.magnetT > 0) parts.push(`磁吸 ${core.magnetT.toFixed(0)}`);
         if (core.doubleT > 0) parts.push(`×2 ${core.doubleT.toFixed(0)}`);
         this.lblItems.string = parts.join(' · ');
+        // 热量条（Phase 4）：HUD 面板内横条 + 数值，≥warnAt 红色闪烁
+        const heatN = Math.round(core.heat);
+        const warn = core.heat >= this.cfg.heat.warnAt;
+        this.lblHeat.string = formatUi(this.cfg.ui.heatLabel, heatN);
+        const warnPulse = warn ? Math.floor(120 + Math.abs(Math.sin(core.gTime * 6)) * 135) : 255;
+        this.lblHeat.node.getComponent(UIOpacity)!.opacity = warnPulse;
+        {
+            const bx = LX(198), by = LY(60), bw = 150, bh = 12;
+            ui.fillColor = new Color(40, 24, 16, 200);
+            ui.rect(bx, by, bw, bh); ui.fill();
+            const frac = core.heat / 100;
+            const hc = warn ? new Color(255, 60, 30, 255) : new Color(255, 150 + frac * 60, 60, 255);
+            ui.fillColor = hc;
+            ui.rect(bx, by, bw * frac, bh); ui.fill();
+            if (warn) {
+                ui.fillColor = new Color(255, 60, 30, Math.floor(Math.abs(Math.sin(core.gTime * 6)) * 70));
+                ui.rect(-DESIGN_W / 2, -DESIGN_H / 2, DESIGN_W, DESIGN_H); ui.fill();
+            }
+        }
+        // 征途进度条（仅征途模式）
+        if (core.mode === 'journey') {
+            const stages = this.cfg.journey.stages;
+            const final = stages[stages.length - 1].goalLi;
+            const frac = Math.min(core.li / final, 1);
+            const bx = LX(90), by = LY(14), bw = 540, bh = 8;
+            ui.fillColor = new Color(40, 24, 16, 190);
+            ui.rect(bx, by, bw, bh); ui.fill();
+            ui.fillColor = new Color(255, 207, 125, 230);
+            ui.rect(bx, by, bw * frac, bh); ui.fill();
+            this.lblJourney.node.setPosition(0, LY(32), 0);
+            const stageLabel = core.journeyStage < stages.length
+                ? formatUi(this.cfg.ui.stageLabel, 0).replace('{label}', stages[core.journeyStage].label).replace('{n}', String(stages[core.journeyStage].goalLi))
+                : this.cfg.ui.endedTitle;
+            this.lblJourney.string = stageLabel;
+            this.lblJourney.node.active = true;
+        } else {
+            this.lblJourney.node.active = false;
+        }
 
         // 路口转向提示（窗口开启时显示方向箭头）
         if (core.state === 'run' && core.turnWindow) {
@@ -317,11 +394,24 @@ export class Hud2D {
             ui.roundRect(LX(60), LY(525), 330 * 1.6, 50 * 1.6, 12 * 1.6); ui.fill();
         }
         this.titleOp.opacity = showTitle ? 255 : 0;
+        this.lblBest.node.active = showTitle;
+        if (showTitle) this.lblBest.string = formatUi(this.cfg.ui.bestLabel, this.bestLi);
+        this.lblBtnJourney.node.active = showTitle;
         if (showTitle) {
             ui.fillColor = new Color(255, 207, 125, 60);
             ui.roundRect(LX(90), LY(445), 270 * 1.6, 50 * 1.6, 14 * 1.6); ui.fill();
             ui.lineWidth = 2; ui.strokeColor = new Color(240, 190, 110, 100);
             ui.roundRect(LX(90), LY(445), 270 * 1.6, 50 * 1.6, 14 * 1.6); ui.stroke();
+            ui.fillColor = new Color(255, 207, 125, 60);
+            ui.roundRect(LX(90), LY(488), 270 * 1.6, 44 * 1.6, 14 * 1.6); ui.fill();
+        }
+        // 胜利面板（征途通关）
+        const showEnded = core.state === 'ended';
+        this.lblEndedT.node.active = showEnded;
+        this.lblEndedS.node.active = showEnded;
+        if (showEnded) {
+            ui.fillColor = new Color(255, 190, 90, 70);
+            ui.rect(-DESIGN_W / 2, -DESIGN_H / 2, DESIGN_W, DESIGN_H); ui.fill();
         }
         this.panelOp.opacity = showDead ? 255 : 0;
         if (showDead) {

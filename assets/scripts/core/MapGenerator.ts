@@ -208,9 +208,11 @@ export class MapGenerator {
             seg.exitHeading = normHeading(this.cur.heading);
         }
 
-        // 更新游标与计数
+        // 更新游标与计数（特殊地块生成后重置特殊间隔计数——否则自此以后全图皆特殊）
         this.cur = { x: seg.exit.x, y: seg.exit.y, z: seg.exit.z, heading: seg.exitHeading, d: seg.startD + length };
+        const isSpecial = kind === 'bridge' || kind === 'cliff' || kind === 'cave' || kind === 'transition';
         if (turn !== 0) { this.sinceTurnD = 0; this.sinceSpecialD += length; }
+        else if (isSpecial) { this.sinceTurnD += length; this.sinceSpecialD = 0; }
         else { this.sinceTurnD += length; this.sinceSpecialD += length; }
         this.lastKind = kind;
         if (kind === 'slopeUp' || kind === 'slopeDown') this.lastSlopeUp = kind === 'slopeUp';

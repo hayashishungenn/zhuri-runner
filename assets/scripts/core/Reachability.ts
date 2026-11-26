@@ -66,12 +66,19 @@ export function validateReachability(events: ObstacleEvent[], ability: RunnerAbi
             if (!inLanes(st.lane) && ev.d - st.ready >= 0) {
                 next.push({ lane: st.lane, ready: Math.max(st.ready, ev.d + ability.reactionDist * 0) });
             }
-            // 转移 2：动作通过（jump/slide）：需提前 cover/2 进入动作（期间不可变道）
+            // 转移 2：动作通过（jump/slide）：需提前 cover/2 进入动作。
+            // 动作期间允许同步变道（规则：空中/滑铲中变道 ✓）——滑铲/跳跃中可转入相邻车道，
+            // 动作结束时落在相邻车道（ready = d + lead 与原地通过一致）。
             if (ev.pass === 'jump' || ev.pass === 'slide') {
                 const cover = ev.pass === 'jump' ? ability.jumpCover : ability.slideCover;
                 const lead = cover / 2;
                 if (ev.d - st.ready >= lead) {
                     next.push({ lane: st.lane, ready: ev.d + lead });
+                    for (const lane of LANES) {
+                        if (Math.abs(lane - st.lane) === 1 && !inLanes(lane)) {
+                            next.push({ lane, ready: ev.d + lead });
+                        }
+                    }
                 }
             }
             // 转移 1：变道后通过（lane 类或避险）——变道距离 + 反应距离守卫
@@ -95,12 +102,17 @@ export function validateReachability(events: ObstacleEvent[], ability: RunnerAbi
     return { reachable: true, failedAt: -1, alive: states.length };
 }
 
-/** 便捷构造：按当前速度推导能力参数 */
+/**
+ * 便捷构造：按当前速度推导能力参数。
+ * reactionDist 语义：事件间转移的反应守卫。障碍在 z=34（≥1.1s）即可见，
+ * 玩家的观察-反应大部分被可见性覆盖，此处仅保留 30% 余量作为纯反应守卫
+ * （100% 反应守卫会把"玩家提前预走位"的组合误判为不可达）。
+ */
 export function abilityForSpeed(speed: number, p: { laneLerp: number; jumpDuration: number; slideDuration: number; reactionTime: number }): RunnerAbility {
     return {
         laneChangeDist: speed * (1 / p.laneLerp) * 1.2,      // 缓动到稳定的时间系数
         jumpCover: speed * p.jumpDuration * 0.85,
         slideCover: speed * p.slideDuration * 0.9,
-        reactionDist: speed * p.reactionTime,
+        reactionDist: speed * p.reactionTime * 0.3,
     };
 }

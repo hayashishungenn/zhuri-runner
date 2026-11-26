@@ -1,9 +1,9 @@
 /** 核心层类型 —— 纯数据，零 cc 依赖 */
 
-export type GameState = 'title' | 'run' | 'dying' | 'dead';
+export type GameState = 'title' | 'run' | 'dying' | 'dead' | 'ended';
 
 /** Phase 3 道具种类 */
-export type ItemKind = 'magnet' | 'shield' | 'dash' | 'double' | 'water';
+export type ItemKind = 'magnet' | 'shield' | 'dash' | 'double' | 'water' | 'staff' | 'leap';
 
 export interface Obstacle {
     /** 目录 defId（数据驱动） */
@@ -43,16 +43,21 @@ export type CoreEventType = 'fragment' | 'milestone' | 'crash' | 'died'
     | 'obstacleSmashed' | 'obstaclePassed'
     | 'jump' | 'land' | 'slideStart' | 'stumble'
     | 'turnOk' | 'turnMiss'
-    | 'shieldBreak' | 'item' | 'water';
+    | 'shieldBreak' | 'item' | 'water'
+    | 'staffBreak' | 'cool' | 'stage' | 'journeyDone';
 
 export interface CoreEvent {
     type: CoreEventType;
-    /** milestone 事件：到达的里程碑数值 */
+    /** milestone 事件：到达的里程碑数值；stage 事件：阶段序号 */
     n?: number;
     /** fragment/item 事件：车道 */
     lane?: number;
     /** item 事件：道具种类 */
     kind?: string;
+    /** cool 事件：降温量 */
+    amount?: number;
+    /** stage 事件：阶段文案 */
+    label?: string;
 }
 
 /** 输入意图（由输入层产生，核心层消费） */

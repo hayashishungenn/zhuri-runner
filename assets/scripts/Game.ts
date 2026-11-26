@@ -3,7 +3,7 @@
  * 职责仅装配：加载配置 → 构建 核心/输入/渲染/广告 → 每帧驱动与事件路由。
  * 玩法规则全部在 core/GameCore；画面在 render/*；平台在 platform/*。
  */
-import { _decorator, Component, Color, error, game, Game as CCGame } from 'cc';
+import { _decorator, Component, Color, error, game, Game as CCGame, sys } from 'cc';
 import { loadGameConfig } from './config/GameConfig';
 import { loadObstacleCatalog } from './config/GameConfig';
 import { formatUi, GameConfig } from './config/GameConfigSchema';
@@ -17,6 +17,7 @@ import { Renderer2D } from './render/Renderer2D';
 import { Renderer3D } from './render/Renderer3D';
 import { AdService, newAdService } from './platform/AdService';
 import { installGlobalErrorHooks } from './platform/ErrorHooks';
+import { Save, Storage } from './platform/Save';
 import { LOGICAL_W, PLAYER_Y } from './render/layout';
 
 const { ccclass } = _decorator;
@@ -31,6 +32,7 @@ export class Game extends Component {
     private inputCtl: InputController | null = null;
     private ad: AdService | null = null;
     private catalog: import('./config/ObstacleCatalog').ObstacleCatalog | null = null;
+    private save: Save | null = null;
 
     async start() {
         installGlobalErrorHooks();
@@ -45,6 +47,10 @@ export class Game extends Component {
             throw e;
         }
         this.catalog = catalog;
+        this.save = new Save({
+            get: (k: string) => sys.localStorage.getItem(k),
+            set: (k: string, v: string) => { sys.localStorage.setItem(k, v); },
+        });
         log.info('配置加载成功 renderMode=' + cfg.renderMode + ' 障碍种类=' + catalog.obstacles.length);
         this.cfg = cfg;
         // 90° 转弯仅在 3D 渲染模式启用（2D 回退保持直线跑道，转弯窗口不出现）
@@ -53,6 +59,7 @@ export class Game extends Component {
         // 2D 渲染器需先于 Hud2D 创建节点，保证 UI 绘制在世界之上
         if (cfg.renderMode === '2d') this.renderer = new Renderer2D(this.node, cfg, catalog);
         this.hud = new Hud2D(this.node, cfg);
+        if (this.save) this.hud.setBestLi(this.save.bestLi());
         if (cfg.renderMode === '3d') this.renderer = new Renderer3D(cfg, catalog);
         this.inputCtl = new InputController(this.makeDelegate(), cfg.input);
         this.inputCtl.attach();
@@ -79,6 +86,15 @@ export class Game extends Component {
         this.core.update(dtRaw);
         this.ad.update(dtRaw);
         const events = this.core.drainEvents();
+        // 结算存档：无尽最佳（死亡/通关瞬间）+ 征途通关标记
+        if (this.save) {
+            for (const e of events) {
+                if (e.type === 'died' && this.core.mode === 'endless') {
+                    if (this.save.setBestLi(this.core.li)) this.hud?.setBestLi(this.save.bestLi());
+                }
+                if (e.type === 'journeyDone') this.save.setJourneyDone();
+            }
+        }
         this.routeEvents(events);
         this.hud.update(dtRaw, this.core);
         this.renderer.onCoreEvents(events);
@@ -105,7 +121,31 @@ export class Game extends Component {
                 hud.showPop(LOGICAL_W / 2, 300, '护盾抵挡！', true, new Color(255, 213, 74, 255));
             } else if (e.type === 'water') {
                 hud.showPop(LOGICAL_W / 2, 300, '神泉饮 · 复振', true, new Color(64, 208, 192, 255));
+            } else if (e.type === 'staffBreak') {
+                hud.showPop(LOGICAL_W / 2, 300, '桃木神杖 · 破！', true, new Color(184, 122, 62, 255));
+            } else if (e.type === 'cool') {
+                hud.showPop(LOGICAL_W / 2 + (e.lane ?? 0) * 60, PLAYER_Y - 160, `清凉 −${e.amount}`, false, new Color(64, 208, 192, 255));
+            } else if (e.type === 'stage') {
+                hud.showPop(LOGICAL_W / 2, 280, e.label ?? '', true, new Color(255, 224, 160, 255));
+            } else if (e.type === 'journeyDone') {
+                // 通关由 ended 面板呈现（下方 onButton/面板逻辑）
             }
+        }
+    }
+
+    /** 按模式启动；记录模式（core.mode 影响征途判定与太阳进度） */
+    private startMode(mode: 'endless' | 'journey') {
+        const core = this.core!;
+        core.mode = mode;
+        core.startRun();
+        this.saveBest();
+    }
+
+    /** 无尽模式：更新最佳纪录（每次起跑/死亡结算时刷新） */
+    private saveBest() {
+        if (!this.save || !this.core) return;
+        if (this.core.mode === 'endless' && this.core.li > 0) {
+            this.save.setBestLi(this.core.li);
         }
     }
 
@@ -132,7 +172,7 @@ export class Game extends Component {
                 if (gx > 408 && gx < 446 && gy > 20 && gy < 62) this.hud.toggleMute();
             },
             onActionStart: () => {
-                if (this.core && this.core.state === 'title') this.core.startRun();
+                if (this.core && this.core.state === 'title') this.startMode('endless');
             },
             onActionPause: () => {
                 if (!this.core) return;

@@ -60,7 +60,7 @@ export interface ObstacleCatalog {
 const PASSES: PassKind[] = ['jump', 'slide', 'lane', 'timing'];
 const DAMAGES: DamageKind[] = ['stumble', 'death'];
 const VIS: VisKind[] = ['rock', 'log', 'beam', 'wall', 'arch', 'gap', 'water', 'fire', 'fence', 'vine', 'bridge', 'roller'];
-const ITEM_IDS = ['magnet', 'shield', 'dash', 'double', 'water'];
+const ITEM_IDS = ['magnet', 'shield', 'dash', 'double', 'water', 'staff', 'leap'];
 
 export function validateCatalog(raw: unknown): string[] {
     const errs: string[] = [];
@@ -160,11 +160,13 @@ export function defaultCatalog(): ObstacleCatalog {
             { id: 'wallFrag', weight: 10, tier: 0, steps: [{ def: 'wall', lane: -1, dz: 0 }, { def: 'wall', lane: 0, dz: 0 }] },
         ],
         items: [
-            { id: 'magnet', label: '磁吸', weight: 26, duration: 12 },
-            { id: 'shield', label: '护盾', weight: 20, duration: 0 },
-            { id: 'dash', label: '冲刺', weight: 14, duration: 3 },
-            { id: 'double', label: '倍率', weight: 22, duration: 10 },
-            { id: 'water', label: '饮水', weight: 18, duration: 0 },
+            { id: 'magnet', label: '磁吸', weight: 22, duration: 12 },
+            { id: 'shield', label: '护盾', weight: 18, duration: 0 },
+            { id: 'dash', label: '御风疾行', weight: 12, duration: 3 },
+            { id: 'double', label: '阳炎倍率', weight: 18, duration: 10 },
+            { id: 'water', label: '甘霖降临', weight: 16, duration: 0 },
+            { id: 'staff', label: '桃木神杖', weight: 8, duration: 0 },
+            { id: 'leap', label: '巨人之跃', weight: 12, duration: 10 },
         ],
         spawn: {
             itemChance: 0.22,

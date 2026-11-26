@@ -61,6 +61,33 @@ export interface DifficultyCfg {
     /** 可达性验证的最小反应时间（秒） */
     reactionTime: number;
 }
+export interface HeatCfg {
+    /** 基础升温速率（每秒） */
+    baseRate: number;
+    /** 难度对升温的放大系数 */
+    dScale: number;
+    /** 预警阈值 */
+    warnAt: number;
+    /** 热满时的强制减速倍率 */
+    maxSlow: number;
+    /** 饮水降温量 */
+    waterReduce: number;
+    /** 安全越过溪流降温量 */
+    streamReduce: number;
+    /** 保底触发热量 */
+    pityHeat: number;
+    /** 保底触发距离（距上次饮水资源） */
+    pityDist: number;
+}
+export interface JourneyStage { goalLi: number; label: string; }
+export interface JourneyCfg { stages: JourneyStage[]; }
+export interface ThemeCfg {
+    label: string;
+    heatMul: number;
+    itemMul: number;
+    trackTint: [number, number, number];
+    curbTint: [number, number, number];
+}
 export interface MapCfg {
     /** 路径生成种子（同种子路径可复现） */
     seed: number;
@@ -111,6 +138,9 @@ export interface UiCfg {
     deadDistLabel: string; deadFragLabel: string;
     speedLabel: string; stumbleText: string;
     pausedTitle: string; resumeBtn: string;
+    modeEndless: string; modeJourney: string; bestLabel: string;
+    heatLabel: string; endedTitle: string; endedSub: string;
+    stageLabel: string;
 }
 export interface GameConfig {
     renderMode: RenderMode;
@@ -121,6 +151,9 @@ export interface GameConfig {
     camera: CameraCfg;
     map: MapCfg;
     difficulty: DifficultyCfg;
+    heat: HeatCfg;
+    journey: JourneyCfg;
+    themes: ThemeCfg[];
     spawn: SpawnCfg;
     obstacle: ObstacleCfg;
     death: DeathCfg;
@@ -150,6 +183,23 @@ export const DEFAULT_CONFIG: GameConfig = {
         themeEvery: 400,
     },
     difficulty: { rampLi: 6000, minInterval: 3, reactionGuard: 0.45, reactionTime: 0.3 },
+    heat: {
+        baseRate: 1.2, dScale: 0.5, warnAt: 80, maxSlow: 0.75,
+        waterReduce: 40, streamReduce: 10, pityHeat: 70, pityDist: 300,
+    },
+    journey: {
+        stages: [
+            { goalLi: 2000, label: '跨过大荒山林' },
+            { goalLi: 4000, label: '渡过黄河渭水' },
+            { goalLi: 6000, label: '西极逐落日' },
+        ],
+    },
+    themes: [
+        { label: '大荒山林', heatMul: 1.0, itemMul: 1.0, trackTint: [58, 34, 20], curbTint: [255, 170, 90] },
+        { label: '黄河渭水', heatMul: 0.7, itemMul: 1.2, trackTint: [46, 44, 52], curbTint: [110, 160, 190] },
+        { label: '极西荒漠', heatMul: 1.6, itemMul: 0.8, trackTint: [120, 84, 40], curbTint: [230, 180, 100] },
+        { label: '扶桑天境', heatMul: 1.2, itemMul: 1.4, trackTint: [140, 96, 36], curbTint: [255, 214, 120] },
+    ],
     spawn: {
         rowInterval: 8, singleRowChance: 0.45, propInterval: 2.4,
         fragmentChance: 0.6, fragmentCount: 5, fragmentGap: 1.5, fragmentLead: 1.6,
@@ -170,6 +220,9 @@ export const DEFAULT_CONFIG: GameConfig = {
         deadDistLabel: '已逐日 {n} 里', deadFragLabel: '拾得阳炎 × {n}',
         speedLabel: '速度 {n}', stumbleText: '踉跄！',
         pausedTitle: '暂 停', resumeBtn: '继续奔跑',
+        modeEndless: '无尽逐日', modeJourney: '逐日征途', bestLabel: '最佳 {n} 里',
+        heatLabel: '暑 {n}', endedTitle: '逐日功成', endedSub: '弃其杖，化为邓林',
+        stageLabel: '{label} · {n} 里',
     },
 };
 
@@ -186,6 +239,11 @@ const NUM_SECTIONS: Record<string, Record<string, NumRule>> = {
     input: { swipeMin: { min: 1 }, tapMax: { min: 0 } },
     camera: { fovBase: { min: 20, max: 120 }, fovGain: { min: 0, max: 60 }, followLerp: { min: 0.1 }, heightFollow: { min: 0, max: 1 } },
     difficulty: { rampLi: { min: 100 }, minInterval: { min: 0.5 }, reactionGuard: { min: 0.05 }, reactionTime: { min: 0.05 } },
+    heat: {
+        baseRate: { min: 0.1 }, dScale: { min: 0, max: 3 }, warnAt: { min: 10, max: 100 },
+        maxSlow: { min: 0.3, max: 1 }, waterReduce: { min: 1 }, streamReduce: { min: 0 },
+        pityHeat: { min: 10, max: 99 }, pityDist: { min: 50 },
+    },
     map: {
         seed: { integer: true, min: 0 }, horizon: { min: 60 }, recycleBehind: { min: 5 },
         straightMin: { min: 4 }, straightMax: { min: 4 },
@@ -221,7 +279,7 @@ export function validateConfig(raw: unknown): string[] {
     const hasOwn = (o: Record<string, unknown>, k: string) => Object.prototype.hasOwnProperty.call(o, k);
 
     // 顶层必填 section
-    for (const sec of ['renderMode', 'world', 'speed', 'player', 'input', 'camera', 'map', 'difficulty', 'spawn', 'obstacle', 'death', 'milestone', 'ad', 'ui']) {
+    for (const sec of ['renderMode', 'world', 'speed', 'player', 'input', 'camera', 'map', 'difficulty', 'heat', 'journey', 'themes', 'spawn', 'obstacle', 'death', 'milestone', 'ad', 'ui']) {
         if (!hasOwn(obj, sec)) errs.push(`缺少字段 ${sec}`);
     }
     if (errs.length) return errs;
@@ -257,6 +315,34 @@ export function validateConfig(raw: unknown): string[] {
             if (rule.integer && !Number.isInteger(v)) errs.push(`${secName}.${key} 必须为整数`);
             if (rule.min !== undefined && v < rule.min) errs.push(`${secName}.${key}=${v} 超出下限 ${rule.min}`);
             if (rule.max !== undefined && v > rule.max) errs.push(`${secName}.${key}=${v} 超出上限 ${rule.max}`);
+        }
+    }
+
+    // themes 数组
+    const themes = obj.themes;
+    if (!Array.isArray(themes) || themes.length < 1) errs.push('themes 必须为非空数组');
+    else {
+        for (const t of themes as unknown[]) {
+            const d = t as Record<string, unknown>;
+            if (typeof d.label !== 'string') errs.push('theme.label 必须为字符串');
+            if (typeof d.heatMul !== 'number' || d.heatMul <= 0) errs.push('theme.heatMul 必须 >0');
+            if (typeof d.itemMul !== 'number' || d.itemMul <= 0) errs.push('theme.itemMul 必须 >0');
+            for (const tk of ['trackTint', 'curbTint'] as const) {
+                if (!Array.isArray(d[tk]) || (d[tk] as unknown[]).length !== 3) errs.push(`theme.${tk} 必须为 [r,g,b]`);
+            }
+        }
+    }
+    // journey
+    const journey = obj.journey as Record<string, unknown> | undefined;
+    if (typeof journey !== 'object' || journey === null || !Array.isArray(journey.stages) || journey.stages.length < 1) {
+        errs.push('journey.stages 必须为非空数组');
+    } else {
+        let prev = 0;
+        for (const st of journey.stages as unknown[]) {
+            const d = st as Record<string, unknown>;
+            if (typeof d.goalLi !== 'number' || d.goalLi <= prev) errs.push('journey.stage.goalLi 必须递增');
+            prev = typeof d.goalLi === 'number' ? d.goalLi : prev;
+            if (typeof d.label !== 'string') errs.push('journey.stage.label 必须为字符串');
         }
     }
 

@@ -44,6 +44,25 @@ echo "Creator : $CREATOR"
 echo "项目    : $PROJ"
 echo "平台    : wechatgame (debug=true)"
 
+# 资产库冷启动防护：library 缺失/不完整时先无构建打开项目完成导入，
+# 否则构建校验会在导入完成前查询场景 → "初始场景不存在" 假失败
+if [ ! -f "$PROJ/library/.assets-data.json" ] || [ ! -d "$PROJ/library/59" ]; then
+    echo "[warmup] 检测到资产库未初始化，先打开项目完成导入（约 30-60s）..."
+    "$CREATOR" --path "$PROJ" > /dev/null 2>&1 &
+    EDITOR_PID=$!
+    # 等待资产库数据文件出现并稳定
+    for _ in $(seq 1 40); do
+        sleep 4
+        M1=$(stat -f %m "$PROJ/library/.assets-data.json" 2>/dev/null || echo)
+        sleep 3
+        M2=$(stat -f %m "$PROJ/library/.assets-data.json" 2>/dev/null || echo)
+        if [ -n "$M1" ] && [ "$M1" = "$M2" ]; then break; fi
+    done
+    pkill -f CocosCreator 2>/dev/null || true
+    sleep 2
+    echo "[warmup] 导入完成，开始构建"
+fi
+
 "$CREATOR" --project "$PROJ" --build "platform=wechatgame;debug=true"
 
 echo "构建产物: $PROJ/build/wechatgame"

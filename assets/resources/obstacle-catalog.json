@@ -1,81 +1,587 @@
 {
   "obstacles": [
-    { "id": "rock", "label": "岩石", "pass": "jump", "damage": "stumble", "lanes": 1, "vis": "rock", "tint": [96, 62, 38], "tier": 0 },
-    { "id": "tallRock", "label": "尖岩", "pass": "jump", "damage": "stumble", "lanes": 1, "vis": "rock", "tint": [120, 70, 44], "scale": 1.35, "tier": 0 },
-    { "id": "boulder", "label": "巨岩", "pass": "jump", "damage": "death", "lanes": 1, "vis": "rock", "tint": [72, 46, 30], "scale": 1.7, "tier": 1 },
-    { "id": "treeFall", "label": "倒木", "pass": "jump", "damage": "stumble", "lanes": 1, "vis": "log", "tint": [88, 56, 30], "scale": 0.7, "tier": 0 },
-    { "id": "creepVine", "label": "藤蔓", "pass": "jump", "damage": "stumble", "lanes": 1, "vis": "vine", "tint": [70, 110, 46], "tier": 0 },
-    { "id": "gap", "label": "沟壑", "pass": "jump", "damage": "death", "lanes": 1, "vis": "gap", "tint": [18, 10, 6], "tier": 1 },
-    { "id": "brokenBridge", "label": "断桥", "pass": "jump", "damage": "death", "lanes": 1, "vis": "bridge", "tint": [64, 40, 24], "tier": 2 },
-    { "id": "stream", "label": "溪流", "pass": "jump", "damage": "stumble", "lanes": 1, "vis": "water", "tint": [60, 130, 160], "tier": 0 },
-    { "id": "firePit", "label": "火堆", "pass": "jump", "damage": "stumble", "lanes": 1, "vis": "fire", "tint": [255, 120, 40], "tier": 1 },
-    { "id": "fireTrail", "label": "火带", "pass": "jump", "damage": "stumble", "lanes": 3, "vis": "fire", "tint": [255, 90, 30], "tier": 2 },
-    { "id": "log", "label": "倒木横梁", "pass": "slide", "damage": "stumble", "lanes": 1, "vis": "beam", "tint": [64, 34, 15], "tier": 0 },
-    { "id": "lowBeam", "label": "低矮宽梁", "pass": "slide", "damage": "stumble", "lanes": 2, "vis": "beam", "tint": [56, 30, 14], "tier": 1 },
-    { "id": "stoneGate", "label": "石拱门", "pass": "slide", "damage": "stumble", "lanes": 1, "vis": "arch", "tint": [70, 46, 30], "tier": 1 },
-    { "id": "wall", "label": "岩墙", "pass": "lane", "damage": "death", "lanes": 1, "vis": "wall", "tint": [51, 29, 16], "tier": 0 },
-    { "id": "spikeWall", "label": "尖刺墙", "pass": "lane", "damage": "death", "lanes": 1, "vis": "wall", "tint": [90, 40, 26], "tier": 1 },
-    { "id": "fireWall", "label": "火墙", "pass": "lane", "damage": "death", "lanes": 1, "vis": "fire", "tint": [255, 60, 20], "scale": 1.6, "tier": 2 },
-    { "id": "tallFence", "label": "高栅栏", "pass": "lane", "damage": "death", "lanes": 1, "vis": "fence", "tint": [80, 50, 26], "tier": 1 },
-    { "id": "doubleRock", "label": "双岩", "pass": "jump", "damage": "stumble", "lanes": 2, "vis": "rock", "tint": [100, 60, 36], "tier": 1 },
-    { "id": "stoneRow", "label": "石阵", "pass": "lane", "damage": "stumble", "lanes": 2, "vis": "rock", "tint": [84, 52, 32], "tier": 1 },
-    { "id": "moverGuard", "label": "往返石墩", "pass": "timing", "damage": "stumble", "lanes": 1, "vis": "rock", "tint": [110, 74, 44], "osc": { "period": 2.4, "lanes": [-1, 1] }, "unlockD": 0.25, "tier": 2 },
-    { "id": "swingLog", "label": "摆木", "pass": "timing", "damage": "death", "lanes": 1, "vis": "beam", "tint": [74, 44, 24], "osc": { "period": 3.0, "lanes": [-1, 0] }, "unlockD": 0.4, "tier": 2 },
-    { "id": "roller", "label": "滚石", "pass": "timing", "damage": "death", "lanes": 1, "vis": "roller", "tint": [96, 60, 36], "rollSpeed": 1.1, "unlockD": 0.3, "tier": 2 }
+    {
+      "id": "rock",
+      "label": "岩石",
+      "pass": "jump",
+      "damage": "stumble",
+      "lanes": 1,
+      "vis": "rock",
+      "tint": [
+        96,
+        62,
+        38
+      ],
+      "tier": 0
+    },
+    {
+      "id": "tallRock",
+      "label": "尖岩",
+      "pass": "jump",
+      "damage": "stumble",
+      "lanes": 1,
+      "vis": "rock",
+      "tint": [
+        120,
+        70,
+        44
+      ],
+      "scale": 1.35,
+      "tier": 0
+    },
+    {
+      "id": "boulder",
+      "label": "巨岩",
+      "pass": "jump",
+      "damage": "death",
+      "lanes": 1,
+      "vis": "rock",
+      "tint": [
+        72,
+        46,
+        30
+      ],
+      "scale": 1.7,
+      "tier": 1
+    },
+    {
+      "id": "treeFall",
+      "label": "倒木",
+      "pass": "jump",
+      "damage": "stumble",
+      "lanes": 1,
+      "vis": "log",
+      "tint": [
+        88,
+        56,
+        30
+      ],
+      "scale": 0.7,
+      "tier": 0
+    },
+    {
+      "id": "creepVine",
+      "label": "藤蔓",
+      "pass": "jump",
+      "damage": "stumble",
+      "lanes": 1,
+      "vis": "vine",
+      "tint": [
+        70,
+        110,
+        46
+      ],
+      "tier": 0
+    },
+    {
+      "id": "gap",
+      "label": "沟壑",
+      "pass": "jump",
+      "damage": "death",
+      "lanes": 1,
+      "vis": "gap",
+      "tint": [
+        18,
+        10,
+        6
+      ],
+      "tier": 1
+    },
+    {
+      "id": "brokenBridge",
+      "label": "断桥",
+      "pass": "jump",
+      "damage": "death",
+      "lanes": 1,
+      "vis": "bridge",
+      "tint": [
+        64,
+        40,
+        24
+      ],
+      "tier": 2
+    },
+    {
+      "id": "stream",
+      "label": "溪流",
+      "pass": "jump",
+      "damage": "stumble",
+      "lanes": 1,
+      "vis": "water",
+      "tint": [
+        60,
+        130,
+        160
+      ],
+      "tier": 0
+    },
+    {
+      "id": "firePit",
+      "label": "火堆",
+      "pass": "jump",
+      "damage": "stumble",
+      "lanes": 1,
+      "vis": "fire",
+      "tint": [
+        255,
+        120,
+        40
+      ],
+      "tier": 1
+    },
+    {
+      "id": "fireTrail",
+      "label": "火带",
+      "pass": "jump",
+      "damage": "stumble",
+      "lanes": 3,
+      "vis": "fire",
+      "tint": [
+        255,
+        90,
+        30
+      ],
+      "tier": 2
+    },
+    {
+      "id": "log",
+      "label": "倒木横梁",
+      "pass": "slide",
+      "damage": "stumble",
+      "lanes": 1,
+      "vis": "beam",
+      "tint": [
+        64,
+        34,
+        15
+      ],
+      "tier": 0
+    },
+    {
+      "id": "lowBeam",
+      "label": "低矮宽梁",
+      "pass": "slide",
+      "damage": "stumble",
+      "lanes": 2,
+      "vis": "beam",
+      "tint": [
+        56,
+        30,
+        14
+      ],
+      "tier": 1
+    },
+    {
+      "id": "stoneGate",
+      "label": "石拱门",
+      "pass": "slide",
+      "damage": "stumble",
+      "lanes": 1,
+      "vis": "arch",
+      "tint": [
+        70,
+        46,
+        30
+      ],
+      "tier": 1
+    },
+    {
+      "id": "wall",
+      "label": "岩墙",
+      "pass": "lane",
+      "damage": "death",
+      "lanes": 1,
+      "vis": "wall",
+      "tint": [
+        51,
+        29,
+        16
+      ],
+      "tier": 0
+    },
+    {
+      "id": "spikeWall",
+      "label": "尖刺墙",
+      "pass": "lane",
+      "damage": "death",
+      "lanes": 1,
+      "vis": "wall",
+      "tint": [
+        90,
+        40,
+        26
+      ],
+      "tier": 1
+    },
+    {
+      "id": "fireWall",
+      "label": "火墙",
+      "pass": "lane",
+      "damage": "death",
+      "lanes": 1,
+      "vis": "fire",
+      "tint": [
+        255,
+        60,
+        20
+      ],
+      "scale": 1.6,
+      "tier": 2
+    },
+    {
+      "id": "tallFence",
+      "label": "高栅栏",
+      "pass": "lane",
+      "damage": "death",
+      "lanes": 1,
+      "vis": "fence",
+      "tint": [
+        80,
+        50,
+        26
+      ],
+      "tier": 1
+    },
+    {
+      "id": "doubleRock",
+      "label": "双岩",
+      "pass": "jump",
+      "damage": "stumble",
+      "lanes": 2,
+      "vis": "rock",
+      "tint": [
+        100,
+        60,
+        36
+      ],
+      "tier": 1
+    },
+    {
+      "id": "stoneRow",
+      "label": "石阵",
+      "pass": "lane",
+      "damage": "stumble",
+      "lanes": 2,
+      "vis": "rock",
+      "tint": [
+        84,
+        52,
+        32
+      ],
+      "tier": 1
+    },
+    {
+      "id": "moverGuard",
+      "label": "往返石墩",
+      "pass": "timing",
+      "damage": "stumble",
+      "lanes": 1,
+      "vis": "rock",
+      "tint": [
+        110,
+        74,
+        44
+      ],
+      "osc": {
+        "period": 2.4,
+        "lanes": [
+          -1,
+          1
+        ]
+      },
+      "unlockD": 0.25,
+      "tier": 2
+    },
+    {
+      "id": "swingLog",
+      "label": "摆木",
+      "pass": "timing",
+      "damage": "death",
+      "lanes": 1,
+      "vis": "beam",
+      "tint": [
+        74,
+        44,
+        24
+      ],
+      "osc": {
+        "period": 3.0,
+        "lanes": [
+          -1,
+          0
+        ]
+      },
+      "unlockD": 0.4,
+      "tier": 2
+    },
+    {
+      "id": "roller",
+      "label": "滚石",
+      "pass": "timing",
+      "damage": "death",
+      "lanes": 1,
+      "vis": "roller",
+      "tint": [
+        96,
+        60,
+        36
+      ],
+      "rollSpeed": 1.1,
+      "unlockD": 0.3,
+      "tier": 2
+    }
   ],
   "patterns": [
-    { "id": "single", "weight": 30, "tier": 0, "steps": [ { "def": "random", "lane": 0, "dz": 0 } ] },
-    { "id": "double", "weight": 26, "tier": 0, "steps": [
-      { "def": "random", "lane": -1, "dz": 0 },
-      { "def": "random", "lane": 1, "dz": 0 }
-    ] },
-    { "id": "hopChain", "weight": 14, "tier": 1, "steps": [
-      { "def": "rock", "lane": 0, "dz": 0 },
-      { "def": "rock", "lane": 0, "dz": 9 },
-      { "def": "rock", "lane": 0, "dz": 18 }
-    ] },
-    { "id": "hopSlide", "weight": 12, "tier": 1, "steps": [
-      { "def": "rock", "lane": 0, "dz": 0 },
-      { "def": "log", "lane": 0, "dz": 10 }
-    ] },
-    { "id": "wallFrag", "weight": 10, "tier": 0, "steps": [
-      { "def": "wall", "lane": -1, "dz": 0 },
-      { "def": "wall", "lane": 0, "dz": 0 }
-    ] },
-    { "id": "gateChain", "weight": 8, "tier": 1, "steps": [
-      { "def": "stoneGate", "lane": 0, "dz": 0 },
-      { "def": "lowBeam", "lane": 0, "dz": 11 }
-    ] },
-    { "id": "fireCorridor", "weight": 6, "tier": 2, "steps": [
-      { "def": "firePit", "lane": -1, "dz": 0 },
-      { "def": "wall", "lane": 0, "dz": 0 },
-      { "def": "firePit", "lane": 1, "dz": 0 }
-    ] },
-    { "id": "gapRun", "weight": 6, "tier": 2, "steps": [
-      { "def": "gap", "lane": 0, "dz": 0 },
-      { "def": "stream", "lane": 0, "dz": 10 }
-    ] },
-    { "id": "timingMix", "weight": 6, "tier": 2, "steps": [
-      { "def": "moverGuard", "lane": -1, "dz": 0 },
-      { "def": "rock", "lane": 1, "dz": 8 }
-    ] },
-    { "id": "stoneRowHop", "weight": 5, "tier": 1, "steps": [
-      { "def": "stoneRow", "lane": -1, "dz": 0 },
-      { "def": "rock", "lane": 1, "dz": 7 }
-    ] }
+    {
+      "id": "single",
+      "weight": 30,
+      "tier": 0,
+      "steps": [
+        {
+          "def": "random",
+          "lane": 0,
+          "dz": 0
+        }
+      ]
+    },
+    {
+      "id": "double",
+      "weight": 26,
+      "tier": 0,
+      "steps": [
+        {
+          "def": "random",
+          "lane": -1,
+          "dz": 0
+        },
+        {
+          "def": "random",
+          "lane": 1,
+          "dz": 0
+        }
+      ]
+    },
+    {
+      "id": "hopChain",
+      "weight": 14,
+      "tier": 1,
+      "steps": [
+        {
+          "def": "rock",
+          "lane": 0,
+          "dz": 0
+        },
+        {
+          "def": "rock",
+          "lane": 0,
+          "dz": 9
+        },
+        {
+          "def": "rock",
+          "lane": 0,
+          "dz": 18
+        }
+      ]
+    },
+    {
+      "id": "hopSlide",
+      "weight": 12,
+      "tier": 1,
+      "steps": [
+        {
+          "def": "rock",
+          "lane": 0,
+          "dz": 0
+        },
+        {
+          "def": "log",
+          "lane": 0,
+          "dz": 10
+        }
+      ]
+    },
+    {
+      "id": "wallFrag",
+      "weight": 10,
+      "tier": 0,
+      "steps": [
+        {
+          "def": "wall",
+          "lane": -1,
+          "dz": 0
+        },
+        {
+          "def": "wall",
+          "lane": 0,
+          "dz": 0
+        }
+      ]
+    },
+    {
+      "id": "gateChain",
+      "weight": 8,
+      "tier": 1,
+      "steps": [
+        {
+          "def": "stoneGate",
+          "lane": 0,
+          "dz": 0
+        },
+        {
+          "def": "lowBeam",
+          "lane": 0,
+          "dz": 11
+        }
+      ]
+    },
+    {
+      "id": "fireCorridor",
+      "weight": 6,
+      "tier": 2,
+      "steps": [
+        {
+          "def": "firePit",
+          "lane": -1,
+          "dz": 0
+        },
+        {
+          "def": "wall",
+          "lane": 0,
+          "dz": 0
+        },
+        {
+          "def": "firePit",
+          "lane": 1,
+          "dz": 0
+        }
+      ]
+    },
+    {
+      "id": "gapRun",
+      "weight": 6,
+      "tier": 2,
+      "steps": [
+        {
+          "def": "gap",
+          "lane": 0,
+          "dz": 0
+        },
+        {
+          "def": "stream",
+          "lane": 0,
+          "dz": 10
+        }
+      ]
+    },
+    {
+      "id": "timingMix",
+      "weight": 6,
+      "tier": 2,
+      "steps": [
+        {
+          "def": "moverGuard",
+          "lane": -1,
+          "dz": 0
+        },
+        {
+          "def": "rock",
+          "lane": 1,
+          "dz": 8
+        }
+      ]
+    },
+    {
+      "id": "stoneRowHop",
+      "weight": 5,
+      "tier": 1,
+      "steps": [
+        {
+          "def": "stoneRow",
+          "lane": -1,
+          "dz": 0
+        },
+        {
+          "def": "rock",
+          "lane": 1,
+          "dz": 7
+        }
+      ]
+    }
   ],
   "items": [
-    { "id": "magnet", "label": "磁吸", "weight": 26, "duration": 12 },
-    { "id": "shield", "label": "护盾", "weight": 20, "duration": 0 },
-    { "id": "dash", "label": "冲刺", "weight": 14, "duration": 3 },
-    { "id": "double", "label": "倍率", "weight": 22, "duration": 10 },
-    { "id": "water", "label": "饮水", "weight": 18, "duration": 0 }
+    {
+      "id": "magnet",
+      "label": "磁吸",
+      "weight": 26,
+      "duration": 12
+    },
+    {
+      "id": "shield",
+      "label": "护盾",
+      "weight": 20,
+      "duration": 0
+    },
+    {
+      "id": "dash",
+      "label": "冲刺",
+      "weight": 14,
+      "duration": 3
+    },
+    {
+      "id": "double",
+      "label": "倍率",
+      "weight": 22,
+      "duration": 10
+    },
+    {
+      "id": "water",
+      "label": "饮水",
+      "weight": 18,
+      "duration": 0
+    },
+    {
+      "id": "staff",
+      "label": "桃木神杖",
+      "weight": 12,
+      "duration": 0
+    },
+    {
+      "id": "leap",
+      "label": "巨人之跃",
+      "weight": 14,
+      "duration": 10
+    }
   ],
   "spawn": {
     "itemChance": 0.22,
     "patternChance": 0.45,
-    "randomPoolTier0": ["rock", "log", "wall", "stream", "treeFall", "creepVine"],
-    "randomPoolTier1": ["tallRock", "boulder", "lowBeam", "stoneGate", "spikeWall", "tallFence", "doubleRock", "stoneRow", "gap", "firePit"],
-    "randomPoolTier2": ["brokenBridge", "fireTrail", "fireWall", "moverGuard", "swingLog", "roller"]
+    "randomPoolTier0": [
+      "rock",
+      "log",
+      "wall",
+      "stream",
+      "treeFall",
+      "creepVine"
+    ],
+    "randomPoolTier1": [
+      "tallRock",
+      "boulder",
+      "lowBeam",
+      "stoneGate",
+      "spikeWall",
+      "tallFence",
+      "doubleRock",
+      "stoneRow",
+      "gap",
+      "firePit"
+    ],
+    "randomPoolTier2": [
+      "brokenBridge",
+      "fireTrail",
+      "fireWall",
+      "moverGuard",
+      "swingLog",
+      "roller"
+    ]
   }
 }

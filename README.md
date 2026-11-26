@@ -1,6 +1,6 @@
 # 逐日 · 夸父逐日神话跑酷（Cocos Creator 3.8.8 + 微信小游戏）
 
-第三人称真 3D 无尽跑酷。P1 起采用模块化架构：`Game.ts` 仅做装配，玩法规则在零依赖核心层，参数全部由 `assets/resources/game-config.json` 驱动（带校验）。
+第三人称真 3D 无尽跑酷：无尽逐日 + 逐日征途双模式，高温饮水、神通（桃木神杖/御风/巨跃/引聚/护体/甘霖）、四主题大荒（山林/渭水/荒漠/扶桑）。P1 起采用模块化架构：`Game.ts` 仅做装配，玩法规则在零依赖核心层，参数全部由 `assets/resources/game-config.json` 驱动（带校验）。
 
 ## 架构速览
 
@@ -14,7 +14,7 @@ assets/scripts/
 └── platform/          # AdService（mock / wx 激励视频）
 ```
 
-测试：`npm test`（vitest，114 项）；类型检查：`npm run type-check`；代码规范：`npm run lint`。
+测试：`npm test`（vitest，132 项）；类型检查：`npm run type-check`；代码规范：`npm run lint`。
 
 ## 首次打开
 1. 打开 `/Applications/CocosCreator/CocosCreator.app`

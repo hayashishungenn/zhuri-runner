@@ -22,11 +22,13 @@ import { CharAnimState } from './CharacterAnimator';
 import { ProceduralKuafu } from './ProceduralKuafu';
 import { WorldShift } from '../core/WorldShift';
 
-/** 道具颜色（magnet/shield/dash/double/water） */
+/** 道具颜色（神通/道具统一配色） */
 const ITEM_TINT: Record<ItemKind, [number, number, number]> = {
     magnet: [58, 160, 255], shield: [255, 213, 74], dash: [255, 83, 64],
     double: [178, 106, 255], water: [64, 208, 192],
+    staff: [184, 122, 62], leap: [120, 220, 130],
 };
+
 
 // ---------- 世界尺度 ----------
 const LANE_W3 = 1.7;
@@ -37,15 +39,7 @@ const LOOK_Y = 1.1;
 const BEHIND_HIDE_Z = 0.5;
 const DEG = 57.29578;
 
-/** 主题跑道色板（theme 取模循环） */
-const THEME_TRACK: [number, number, number][] = [
-    [58, 34, 20],    // 黄昏（默认）
-    [40, 24, 18],    // 夜
-    [72, 38, 24],    // 黎明
-];
-const THEME_CURB: [number, number, number][] = [
-    [255, 170, 90], [140, 110, 160], [255, 190, 120],
-];
+
 
 const DASH_STEP = 3.2;
 const DASH_PER_LANE = 9;
@@ -302,8 +296,9 @@ export class Renderer3D implements IRenderer {
         const mr = ribbon.addComponent(MeshRenderer);
         view.mesh = this.buildRibbonMesh(seg);
         mr.mesh = view.mesh;
-        const theme = seg.theme % THEME_TRACK.length;
-        mr.material = this.mat(`ribbon${theme}`, THEME_TRACK[theme]);
+        const theme = seg.theme % this.cfg.themes.length;
+        const tt = this.cfg.themes[theme].trackTint;
+        mr.material = this.mat(`ribbon${theme}`, tt);
         const entryR = this.world.toRender(seg.entry);
         node.setPosition(entryR.x, entryR.y, entryR.z);
 
@@ -314,7 +309,7 @@ export class Renderer3D implements IRenderer {
             curb.setParent(node);
             const cmr = curb.addComponent(MeshRenderer);
             cmr.mesh = this.buildEdgeRibbon(seg, side * (seg.halfWidth + 0.12), 0.16);
-            cmr.material = this.mat(`curb${theme}`, THEME_CURB[theme]);
+            cmr.material = this.mat(`curb${theme}`, this.cfg.themes[theme].curbTint);
         }
 
         // 特殊地块装饰（位置相对入口）
@@ -727,9 +722,12 @@ export class Renderer3D implements IRenderer {
             const k = s.base * (0.6 + 0.6 * twinkle(s.phase)) * (1 - prog * 0.8);
             s.node.setScale(k, k, k);
         }
+        const sp = core.sunProgress;                 // 逐日进度：太阳西沉增大——"追上"的视觉反馈
         const sunScale = 12 + prog * 10;
-        this.sunNodes[0].setScale(sunScale, sunScale, sunScale);
-        this.sunNodes[1].setScale(sunScale * 1.3, sunScale * 1.3, sunScale * 1.3);
+        this.sunNodes[0].setPosition(0, 10 - 5.5 * sp, -160 + 6 * sp);
+        this.sunNodes[0].setScale(sunScale * (1 + 0.7 * sp), sunScale * (1 + 0.7 * sp), sunScale * (1 + 0.7 * sp));
+        this.sunNodes[1].setScale(sunScale * 1.3 * (1 + 0.7 * sp), sunScale * 1.3 * (1 + 0.7 * sp), sunScale * 1.3 * (1 + 0.7 * sp));
+        this.sunNodes[1].setPosition(0, 10 - 5.5 * sp, -160.5 + 6 * sp);
         this.cam.clearColor = new Color(
             Math.round(seg(1)[0]), Math.round(seg(1)[1]), Math.round(seg(1)[2]), 255);
     }

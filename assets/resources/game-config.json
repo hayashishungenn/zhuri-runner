@@ -95,7 +95,14 @@
     "deadFragLabel": "拾得阳炎 × {n}",
     "stumbleText": "踉跄！",
     "pausedTitle": "暂 停",
-    "resumeBtn": "继续奔跑"
+    "resumeBtn": "继续奔跑",
+    "modeEndless": "无尽逐日",
+    "modeJourney": "逐日征途",
+    "bestLabel": "最佳 {n} 里",
+    "heatLabel": "暑 {n}",
+    "endedTitle": "逐日功成",
+    "endedSub": "弃其杖，化为邓林",
+    "stageLabel": "{label} · {n} 里"
   },
   "map": {
     "seed": 12345,
@@ -122,5 +129,93 @@
     "minInterval": 3,
     "reactionGuard": 0.45,
     "reactionTime": 0.3
-  }
+  },
+  "heat": {
+    "baseRate": 1.2,
+    "dScale": 0.5,
+    "warnAt": 80,
+    "maxSlow": 0.75,
+    "waterReduce": 40,
+    "streamReduce": 10,
+    "pityHeat": 70,
+    "pityDist": 300
+  },
+  "journey": {
+    "stages": [
+      {
+        "goalLi": 2000,
+        "label": "跨过大荒山林"
+      },
+      {
+        "goalLi": 4000,
+        "label": "渡过黄河渭水"
+      },
+      {
+        "goalLi": 6000,
+        "label": "西极逐落日"
+      }
+    ]
+  },
+  "themes": [
+    {
+      "label": "大荒山林",
+      "heatMul": 1.0,
+      "itemMul": 1.0,
+      "trackTint": [
+        58,
+        34,
+        20
+      ],
+      "curbTint": [
+        255,
+        170,
+        90
+      ]
+    },
+    {
+      "label": "黄河渭水",
+      "heatMul": 0.7,
+      "itemMul": 1.2,
+      "trackTint": [
+        46,
+        44,
+        52
+      ],
+      "curbTint": [
+        110,
+        160,
+        190
+      ]
+    },
+    {
+      "label": "极西荒漠",
+      "heatMul": 1.6,
+      "itemMul": 0.8,
+      "trackTint": [
+        120,
+        84,
+        40
+      ],
+      "curbTint": [
+        230,
+        180,
+        100
+      ]
+    },
+    {
+      "label": "扶桑天境",
+      "heatMul": 1.2,
+      "itemMul": 1.4,
+      "trackTint": [
+        140,
+        96,
+        36
+      ],
+      "curbTint": [
+        255,
+        214,
+        120
+      ]
+    }
+  ]
 }

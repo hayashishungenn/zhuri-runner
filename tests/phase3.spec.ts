@@ -330,6 +330,8 @@ describe('自动化跑酷模拟器（完美玩家 · 无必死组合验证）', 
     it('1000 种子 × 60s：发射序列逐波重放全部可达 + 死亡哨兵', () => {
         let totalDeaths = 0, totalTurns = 0, totalValidated = 0, totalRejected = 0;
         let waveReplays = 0;
+        let replayFails = 0;
+        const replayFailed = false;
         for (let seed = 1; seed <= 1000; seed++) {
             let prev = new Set<GameCore['obstacles'][number]>();
             let prevWave: { d: number; lanes: number[]; pass: 'jump' | 'slide' | 'lane' }[] = [];
@@ -366,7 +368,15 @@ describe('自动化跑酷模拟器（完美玩家 · 无必死组合验证）', 
                         reactionTime: CFG.difficulty.reactionTime,
                     });
                     const reach = validateReachability([...prevWave, ...waveEvts], abilitySpawn);
-                    expect(reach.reachable).toBe(true);        // ★ 每一波发射（含与上一波合并）均可达
+                    if (!reach.reachable && seed <= 50) {
+                        console.log(`[replay] seed=${seed} failedAt=${reach.failedAt} spd=${c.speed.toFixed(1)} 上一波=${JSON.stringify(prevWave)} 本波=${JSON.stringify(waveEvts)}`);
+                    }
+                    if (!reach.reachable) {
+                        replayFails++;
+                        if (replayFails <= 3) {
+                            console.log(`[replay-miss] seed=${seed} failedAt=${reach.failedAt} spd=${c.speed.toFixed(1)} 上一波=${JSON.stringify(prevWave)} 本波=${JSON.stringify(waveEvts)}`);
+                        }
+                    }
                     waveReplays++;
                     prevWave = waveEvts;
                 }
@@ -379,7 +389,9 @@ describe('自动化跑酷模拟器（完美玩家 · 无必死组合验证）', 
             void lastDist;
         }
         expect(waveReplays).toBeGreaterThan(500);              // 重放采样规模（1000 种子 × 60s）
-        expect(totalDeaths).toBeLessThanOrEqual(30);           // 哨兵：完美玩家残余死亡（驱动器启发式局限）
+        console.log(`[replay统计] fails=${replayFails}/${waveReplays} deaths=${totalDeaths}`);
+        expect(replayFails).toBe(0);                   // ★ 发射波全部可达（跨波合并验证）
+        expect(totalDeaths).toBeLessThanOrEqual(30);   // 哨兵：完美玩家残余死亡（驱动器启发式局限）           // 哨兵：完美玩家残余死亡（驱动器启发式局限）
         expect(totalTurns).toBeGreaterThan(500);
         expect(totalValidated).toBeGreaterThan(5000);
         expect(totalRejected).toBeGreaterThan(0);              // 拒绝机制确实拦截过组合
