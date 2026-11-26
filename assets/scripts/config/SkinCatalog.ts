@@ -17,6 +17,21 @@ export interface SkinDef {
 }
 export interface SkinCatalog { skins: SkinDef[]; }
 
+/** 默认初始拥有皮肤 id（唯一真源） */
+export const DEFAULT_SKIN_ID = 'kuafu';
+
+/** 皮肤灵光金币售价表（配置单一真源，供商店与成长服务共用） */
+export const SKIN_COSTS: Readonly<Record<string, number>> = Object.freeze({
+    kuafu: 0,
+    xuanjia: 600,
+    chiyan: 800,
+    cangteng: 800,
+    jinwu: 1200,
+    weishui: 1000,
+    huangmo: 1000,
+    fusang: 2000,
+});
+
 const SHAPES = ['sphere', 'cone', 'box', 'cyl'];
 
 export function validateSkins(raw: unknown): string[] {
