@@ -5,6 +5,7 @@
  */
 import { _decorator, Component, Color, error, game, Game as CCGame } from 'cc';
 import { loadGameConfig } from './config/GameConfig';
+import { loadObstacleCatalog } from './config/GameConfig';
 import { formatUi, GameConfig } from './config/GameConfigSchema';
 import { GameCore } from './core/GameCore';
 import { Logger } from './core/Logger';
@@ -29,26 +30,30 @@ export class Game extends Component {
     private renderer: IRenderer | null = null;
     private inputCtl: InputController | null = null;
     private ad: AdService | null = null;
+    private catalog: import('./config/ObstacleCatalog').ObstacleCatalog | null = null;
 
     async start() {
         installGlobalErrorHooks();
         let cfg: GameConfig;
+        let catalog;
         try {
-            cfg = await loadGameConfig();     // 非法配置在此抛错（不静默回退）
+            // 双数据源加载：玩法配置 + 障碍/道具目录（非法均抛错拒绝启动）
+            [cfg, catalog] = await Promise.all([loadGameConfig(), loadObstacleCatalog()]);
         } catch (e) {
             error('[Game] 配置加载失败，游戏无法启动: ' + String(e));
             log.error('配置加载失败，游戏无法启动', String(e));
             throw e;
         }
-        log.info('配置加载成功 renderMode=' + cfg.renderMode);
+        this.catalog = catalog;
+        log.info('配置加载成功 renderMode=' + cfg.renderMode + ' 障碍种类=' + catalog.obstacles.length);
         this.cfg = cfg;
         // 90° 转弯仅在 3D 渲染模式启用（2D 回退保持直线跑道，转弯窗口不出现）
-        this.core = new GameCore(cfg, undefined, { turnsEnabled: cfg.renderMode === '3d' });
+        this.core = new GameCore(cfg, undefined, { turnsEnabled: cfg.renderMode === '3d', catalog });
         this.ad = newAdService(cfg);
         // 2D 渲染器需先于 Hud2D 创建节点，保证 UI 绘制在世界之上
-        if (cfg.renderMode === '2d') this.renderer = new Renderer2D(this.node, cfg);
+        if (cfg.renderMode === '2d') this.renderer = new Renderer2D(this.node, cfg, catalog);
         this.hud = new Hud2D(this.node, cfg);
-        if (cfg.renderMode === '3d') this.renderer = new Renderer3D(cfg);
+        if (cfg.renderMode === '3d') this.renderer = new Renderer3D(cfg, catalog);
         this.inputCtl = new InputController(this.makeDelegate(), cfg.input);
         this.inputCtl.attach();
         // 退后台自动暂停（微信 onHide / 浏览器切页），回到前台由玩家手动恢复
@@ -93,6 +98,13 @@ export class Game extends Component {
                 hud.showPop(LOGICAL_W / 2, 250, formatUi(this.cfg!.ui.milestoneText, e.n ?? 0), true, main);
             } else if (e.type === 'stumble') {
                 hud.showPop(LOGICAL_W / 2, 320, this.cfg!.ui.stumbleText, true, new Color(255, 122, 82, 255));
+            } else if (e.type === 'item') {
+                const def = this.catalog?.items.find((x) => x.id === e.kind);
+                hud.showPop(LOGICAL_W / 2 + (e.lane ?? 0) * 60, PLAYER_Y - 170, def?.label ?? String(e.kind), true, new Color(120, 200, 255, 255));
+            } else if (e.type === 'shieldBreak') {
+                hud.showPop(LOGICAL_W / 2, 300, '护盾抵挡！', true, new Color(255, 213, 74, 255));
+            } else if (e.type === 'water') {
+                hud.showPop(LOGICAL_W / 2, 300, '神泉饮 · 复振', true, new Color(64, 208, 192, 255));
             }
         }
     }

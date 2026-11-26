@@ -4,6 +4,7 @@
  */
 import { Node, Graphics, Color, Layers } from 'cc';
 import { GameConfig } from '../config/GameConfigSchema';
+import { ObstacleCatalog } from '../config/ObstacleCatalog';
 import { GameCore } from '../core/GameCore';
 import { AdService } from '../platform/AdService';
 import { IRenderer } from './IRenderer';
@@ -21,8 +22,10 @@ export class Renderer2D implements IRenderer {
     // P0 透视参数
     private static readonly PROJ_K = 1.1;
 
-    constructor(parent: Node, cfg: GameConfig) {
+    private catalog: ObstacleCatalog | null;
+    constructor(parent: Node, cfg: GameConfig, catalog?: ObstacleCatalog) {
         this.cfg = cfg;
+        this.catalog = catalog ?? null;
         const n = new Node('world2d');
         n.layer = Layers.Enum.UI_2D;
         n.setParent(parent);
@@ -193,12 +196,23 @@ export class Renderer2D implements IRenderer {
                 g.circle(px + swy, LY(oy) + th + 18 * pr.s * s2 * S, 40 * pr.s * s2 * S * 0.6);
                 g.fill();
             } else if (it.kind === 'ob') {
-                const ob = it.o as { lane: number; type: string };
+                const ob = it.o as { lane: number; defId: string };
+                const def = this.catalog?.obstacles.find((x) => x.id === ob.defId);
                 const ox = this.sxLane(ob.lane, s2), oyLY = LY(oy);
                 g.fillColor = this.col(0, 0, 0, 76);
                 g.ellipse(ox, oyLY, 40 * s2 * S, 10 * s2 * S);
                 g.fill();
-                if (ob.type === 'rock') {
+                const tint = def?.tint ?? [58, 36, 20];
+                const vis = def?.vis ?? 'rock';
+                if (vis === 'gap' || vis === 'water' || vis === 'bridge') {
+                    // 地面带状（暗渊/水/断桥）：贴地色带
+                    g.fillColor = this.col(tint[0], tint[1], tint[2], 230);
+                    g.rect(ox - 42 * s2 * S, oyLY, 84 * s2 * S, 12 * s2 * S); g.fill();
+                } else if (vis === 'fire') {
+                    g.fillColor = this.col(tint[0], tint[1], tint[2], 240);
+                    g.moveTo(ox - 26 * s2 * S, oyLY); g.lineTo(ox, oyLY + 52 * s2 * S); g.lineTo(ox + 26 * s2 * S, oyLY);
+                    g.close(); g.fill();
+                } else if (vis === 'wall' || vis === 'arch' || vis === 'fence') {
                     g.fillColor = this.col(58, 36, 20, 255);
                     g.moveTo(ox - 40 * s2 * S, oyLY);
                     g.lineTo(ox - 26 * s2 * S, oyLY + 34 * s2 * S);
@@ -206,10 +220,10 @@ export class Renderer2D implements IRenderer {
                     g.lineTo(ox + 24 * s2 * S, oyLY + 30 * s2 * S);
                     g.lineTo(ox + 40 * s2 * S, oyLY);
                     g.close(); g.fill();
-                    g.fillColor = this.col(255, 180, 100, 90);
+                    g.fillColor = this.col(tint[0] + 40, tint[1] + 30, tint[2] + 20, 90);
                     g.moveTo(ox - 26 * s2 * S, oyLY + 34 * s2 * S); g.lineTo(ox - 4 * s2 * S, oyLY + 44 * s2 * S); g.lineTo(ox + 2 * s2 * S, oyLY + 20 * s2 * S);
                     g.close(); g.fill();
-                } else if (ob.type === 'log') {
+                } else if (vis === 'log' || vis === 'beam' || vis === 'vine') {
                     g.fillColor = this.col(44, 24, 13, 255);
                     g.rect(ox - 44 * s2 * S, oyLY, 8 * s2 * S, 70 * s2 * S); g.fill();
                     g.rect(ox + 36 * s2 * S, oyLY, 8 * s2 * S, 70 * s2 * S); g.fill();
@@ -218,7 +232,7 @@ export class Renderer2D implements IRenderer {
                     g.lineWidth = 3; g.strokeColor = this.col(255, 209, 102, 204);
                     g.moveTo(ox - 44 * s2 * S, oyLY + 96 * s2 * S); g.lineTo(ox + 44 * s2 * S, oyLY + 96 * s2 * S); g.stroke();
                 } else {
-                    g.fillColor = this.col(51, 29, 16, 255);
+                    g.fillColor = this.col(tint[0], tint[1], tint[2], 255);
                     g.moveTo(ox - 52 * s2 * S, oyLY);
                     g.lineTo(ox - 44 * s2 * S, oyLY + 96 * s2 * S);
                     g.lineTo(ox - 10 * s2 * S, oyLY + 118 * s2 * S);

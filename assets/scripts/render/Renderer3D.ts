@@ -15,11 +15,18 @@ import { AdService } from '../platform/AdService';
 import { IRenderer } from './IRenderer';
 import { Hud2D } from './Hud2D';
 import { ScreenFx } from './ScreenFx';
-import { Obstacle, Fragment, Prop } from '../core/types';
+import { Obstacle, Fragment, Prop, ItemEntity, ItemKind } from '../core/types';
 import { TrackSegment, PathSample } from '../core/track';
+import { ObstacleCatalog, ObstacleDef } from '../config/ObstacleCatalog';
 import { CharAnimState } from './CharacterAnimator';
 import { ProceduralKuafu } from './ProceduralKuafu';
 import { WorldShift } from '../core/WorldShift';
+
+/** 道具颜色（magnet/shield/dash/double/water） */
+const ITEM_TINT: Record<ItemKind, [number, number, number]> = {
+    magnet: [58, 160, 255], shield: [255, 213, 74], dash: [255, 83, 64],
+    double: [178, 106, 255], water: [64, 208, 192],
+};
 
 // ---------- 世界尺度 ----------
 const LANE_W3 = 1.7;
@@ -85,9 +92,13 @@ export class Renderer3D implements IRenderer {
     private core: GameCore | null = null;
     private dt = 0.016;
     private playerX = 0;
+    private catalog: ObstacleCatalog;
+    private defMap = new Map<string, ObstacleDef>();
 
-    constructor(cfg: GameConfig) {
+    constructor(cfg: GameConfig, catalog: ObstacleCatalog) {
         this.cfg = cfg;
+        this.catalog = catalog;
+        for (const d of catalog.obstacles) this.defMap.set(d.id, d);
         this.buildScene();
     }
 
@@ -390,40 +401,11 @@ export class Renderer3D implements IRenderer {
         if (!pool) { pool = []; this.pools.set(kind, pool); }
         pool.push(n);
     }
-    private createEntityNode(kind: string): Node {
-        switch (kind) {
-        case 'rock': {
-            const n = new Node('rock');
-            n.layer = Layers.Enum.DEFAULT;
-            n.setParent(this.root3d);
-            const body = this.node3d(n, 'body', this.mBox, [58, 36, 20]);
-            body.setPosition(0, 0.35, 0); body.setScale(1.2, 0.7, 0.9);
-            const cap = this.node3d(n, 'cap', this.mCone, [80, 50, 30]);
-            cap.setPosition(0, 0.9, 0); cap.setScale(0.7, 0.5, 0.55);
-            return n;
-        }
-        case 'log': {
-            const n = new Node('log');
-            n.layer = Layers.Enum.DEFAULT;
-            n.setParent(this.root3d);
-            for (const s of [-1, 1]) {
-                const post = this.node3d(n, 'post', this.mBox, [44, 24, 13]);
-                post.setPosition(s * 0.72, 0.35, 0); post.setScale(0.14, 0.7, 0.14);
-            }
-            const bar = this.node3d(n, 'bar', this.mBox, [64, 34, 15]);
-            bar.setPosition(0, 0.78, 0); bar.setScale(1.6, 0.16, 0.2);
-            const glow = this.node3d(n, 'glow', this.mBox, [255, 209, 102]);
-            glow.setPosition(0, 0.96, 0); glow.setScale(1.5, 0.03, 0.12);
-            return n;
-        }
-        case 'wall': {
-            const n = new Node('wall');
-            n.layer = Layers.Enum.DEFAULT;
-            n.setParent(this.root3d);
-            const body = this.node3d(n, 'body', this.mBox, [51, 29, 16]);
-            body.setPosition(0, 0.9, 0); body.setScale(1.6, 1.8, 0.5);
-            return n;
-        }
+    /** 实体节点工厂：障碍按目录 defId（vis 形态+配色+尺寸参数化），其余为场景实体/道具 */
+    private createEntityNode(key: string): Node {
+        const def = this.defMap.get(key);
+        if (def) return this.createObstacleNode(def);
+        switch (key) {
         case 'frag': {
             const n = new Node('frag');
             n.layer = Layers.Enum.DEFAULT;
@@ -450,16 +432,123 @@ export class Renderer3D implements IRenderer {
             body.setPosition(0, 0.4, 0); body.setScale(0.8, 0.8, 0.8);
             return n;
         }
-        default: throw new Error('未知实体类型: ' + kind);
+        default: {
+            // 道具：发光球体（配色区分，旋转由摆放驱动）
+            const n = new Node(key);
+            n.layer = Layers.Enum.DEFAULT;
+            n.setParent(this.root3d);
+            const rgb = ITEM_TINT[key as ItemKind] ?? [255, 255, 255];
+            const orb = this.node3d(n, 'orb', this.mSphere, rgb, `item_${key}`);
+            orb.setScale(0.36, 0.36, 0.36);
+            return n;
         }
+        }
+    }
+
+    /** 障碍形态工厂（vis 基元组合，宽度/高度按占道数与 scale 参数化） */
+    private createObstacleNode(def: ObstacleDef): Node {
+        const S = def.scale ?? 1;
+        const W = 0.9 + def.lanes * 0.75;   // 视觉宽度（世界单位）
+        const rgb = def.tint;
+        const n = new Node(def.id);
+        n.layer = Layers.Enum.DEFAULT;
+        n.setParent(this.root3d);
+        const addBox = (name: string, x: number, y: number, z: number, sx: number, sy: number, sz: number, c: [number, number, number] = rgb) => {
+            const b = this.node3d(n, name, this.mBox, c);
+            b.setPosition(x, y, z);
+            b.setScale(sx, sy, sz);
+            return b;
+        };
+        const addCone = (name: string, x: number, y: number, z: number, sx: number, sy: number, sz: number, c: [number, number, number] = rgb) => {
+            const b = this.node3d(n, name, this.mCone, c);
+            b.setPosition(x, y, z);
+            b.setScale(sx, sy, sz);
+            return b;
+        };
+        const addCyl = (name: string, x: number, y: number, z: number, sx: number, sy: number, sz: number, c: [number, number, number] = rgb) => {
+            const b = this.node3d(n, name, this.mCyl, c);
+            b.setPosition(x, y, z);
+            b.setScale(sx, sy, sz);
+            return b;
+        };
+        const addSphere = (name: string, x: number, y: number, z: number, s: number, c: [number, number, number] = rgb) => {
+            const b = this.node3d(n, name, this.mSphere, c);
+            b.setPosition(x, y, z);
+            b.setScale(s, s, s);
+            return b;
+        };
+
+        switch (def.vis) {
+        case 'rock':       // 石堆（jump）：主体箱 + 尖顶
+            addBox('body', 0, 0.35 * S, 0, 1.1 * S, 0.7 * S, 0.9 * S);
+            addCone('cap', 0, 0.9 * S, 0, 0.7 * S, 0.55 * S, 0.6 * S);
+            break;
+        case 'log':        // 倒木（jump）：横卧圆柱
+            addCyl('trunk', 0, 0.3 * S, 0, 0.5 * S, 0.8 * W, 0.5 * S);
+            break;
+        case 'beam':       // 低梁/摆木（slide/摆动）：双支柱 + 横梁 + 顶亮条
+            for (const side of [-1, 1]) addBox('post', side * W * 0.45, 0.35, 0, 0.14, 0.7, 0.14);
+            addBox('bar', 0, 0.78, 0, W, 0.16, 0.2);
+            addBox('glow', 0, 0.96, 0, W * 0.94, 0.03, 0.12, [255, 209, 102]);
+            break;
+        case 'wall':       // 墙类（lane）：高墙 + 沿口
+            addBox('body', 0, 0.9, 0, W * 1.05, 1.8, 0.5);
+            addBox('top', 0, 1.86, 0, W * 1.1, 0.14, 0.56);
+            break;
+        case 'arch':       // 拱门（slide 必须低头）：门柱 + 低顶梁
+            for (const side of [-1, 1]) addBox('pillar', side * W * 0.5, 0.75, 0, 0.3, 1.5, 0.4);
+            addBox('lintel', 0, 1.55, 0, W * 1.1, 0.4, 0.45);
+            break;
+        case 'gap':        // 沟壑（jump 跨越）：暗渊平面 + 边缘警示
+            addBox('void', 0, 0.005, 0, W * 1.05, 0.02, 1.6, [16, 9, 5]);
+            addBox('edge1', 0, 0.06, -0.8, W * 1.05, 0.08, 0.12, [200, 150, 90]);
+            addBox('edge2', 0, 0.06, 0.8, W * 1.05, 0.08, 0.12, [200, 150, 90]);
+            break;
+        case 'water':      // 溪流（jump 跨越）：水面带
+            addBox('surface', 0, 0.04, 0, W * 1.05, 0.05, 1.4, [70, 140, 170]);
+            addBox('foam1', 0, 0.06, -0.7, W * 1.05, 0.04, 0.14, [200, 230, 240]);
+            addBox('foam2', 0, 0.06, 0.7, W * 1.05, 0.04, 0.14, [200, 230, 240]);
+            break;
+        case 'fire':       // 火焰/火墙：火锥群 + 底座
+            addBox('base', 0, 0.05, 0, W, 0.08, 0.8, [70, 30, 16]);
+            for (let i = 0; i < 3; i++) {
+                const off = (i - 1) * W * 0.3;
+                addCone('flame' + i, off, 0.5 * S, 0, 0.4, 1.0 * S, 0.4);
+            }
+            break;
+        case 'fence':      // 栅栏（lane）：竖条阵列 + 顶梁
+            for (let i = 0; i < 4; i++) {
+                addBox('slat' + i, -W * 0.4 + i * (W * 0.8 / 3), 0.7, 0, 0.14, 1.4, 0.14);
+            }
+            addBox('top', 0, 1.45, 0, W * 1.05, 0.12, 0.16);
+            break;
+        case 'vine':       // 藤蔓（jump）：贴地绿障
+            addBox('base', 0, 0.12, 0, W, 0.22, 0.5, [70, 110, 46]);
+            for (let i = 0; i < 3; i++) {
+                addCyl('stalk' + i, -W * 0.3 + i * (W * 0.3), 0.3, 0, 0.08, 0.6, 0.08, [60, 96, 40]);
+            }
+            break;
+        case 'bridge':     // 断桥（jump 跨越）：断裂板
+            addBox('plank1', -W * 0.3, 0.1, -0.4, W * 0.4, 0.16, 0.7, [78, 50, 30]);
+            addBox('plank2', W * 0.35, 0.06, 0.35, W * 0.35, 0.14, 0.6, [66, 42, 26]);
+            break;
+        case 'roller':     // 滚石（时机跳跃）：大圆石
+            addSphere('ball', 0, 0.62, 0, 1.24);
+            break;
+        default:
+            addBox('body', 0, 0.5, 0, W, 1.0, 0.5);
+        }
+        return n;
     }
 
     private syncEntities() {
         const core = this.core!;
-        this.syncList(core.obstacles, this.obRecs, (o) => o.type);
+        this.syncList(core.obstacles, this.obRecs, (o) => o.defId);
         this.syncList(core.fragments.filter((f) => !f.got), this.fragRecs, () => 'frag');
+        this.syncList(core.items.filter((x) => !x.got), this.itemRecs, (x) => x.kind);
         this.syncList(core.props, this.propRecs, (p) => (p.kind === 'tree' ? 'tree' : 'prock'));
     }
+    private itemRecs = new Map<ItemEntity, Rec>();
     private syncList<T>(list: T[], recs: Map<T, Rec>, kindOf: (t: T) => string) {
         const seen = new Set<T>();
         for (const e of list) {
@@ -507,11 +596,21 @@ export class Renderer3D implements IRenderer {
     // ---------- 摆放（全部经 path.sample + WorldShift） ----------
     private placeEntities(core: GameCore) {
         for (const [o, rec] of this.obRecs) {
-            const p = core.path.sample(core.dist + o.z, o.lane * LANE_W3);
+            const lx = o.visLane ?? o.lane;
+            const p = core.path.sample(core.dist + o.z, lx * LANE_W3);
             const r = this.world.toRender(p);
             rec.node.setPosition(r.x, r.y, r.z);
             rec.node.setRotationFromEuler(0, p.heading * DEG, 0);
             rec.node.active = o.z > BEHIND_HIDE_Z;
+        }
+        for (const [it, rec] of this.itemRecs) {
+            const p = core.path.sample(core.dist + it.z, it.lane * LANE_W3);
+            const r = this.world.toRender(p);
+            const bob = Math.sin(core.gTime * 4 + it.z) * 0.08;
+            rec.node.setPosition(r.x, r.y + 0.9 + bob, r.z);
+            rec.node.setScale(0.36, 0.36, 0.36);
+            rec.node.setRotationFromEuler(0, core.gTime * 90, 0);
+            rec.node.active = it.z > BEHIND_HIDE_Z;
         }
         for (const [f, rec] of this.fragRecs) {
             const p = core.path.sample(core.dist + f.z, f.lane * LANE_W3);

@@ -50,6 +50,7 @@ export class Hud2D {
     private lblAdC!: Label;
     private lblAdN!: Label;
     private lblSpeed!: Label;
+    private lblItems!: Label;
     private lblPaused!: Label;
     private lblResume!: Label;
     private lblRestart2!: Label;
@@ -122,6 +123,10 @@ export class Hud2D {
         const sp = this.makeLabel(parent, 'hSpeed', 22, C_WHITE());
         this.lblSpeed = sp.lbl;
         sp.node.setPosition(LX(160), LY(95), 0);
+        // 道具状态（Phase 3）：活跃道具 + 剩余秒
+        const it = this.makeLabel(parent, 'hItems', 18, new Color(120, 200, 255, 255));
+        this.lblItems = it.lbl;
+        it.node.setPosition(LX(110), LY(60), 0);
 
         // 暂停面板
         const pt = this.makeLabel(parent, 'zTitle', 44, lc);
@@ -234,6 +239,13 @@ export class Hud2D {
         this.lblFrag.string = formatUi(this.cfg.ui.fragLabel, core.frags);
         this.lblFrag.node.setPosition(LX(70), LY(95), 0);
         this.lblSpeed.string = formatUi(this.cfg.ui.speedLabel, Math.round(core.effectiveSpeed));
+        // 道具状态文本（优先级：冲刺 > 护盾 > 磁吸 > 倍率）
+        const parts: string[] = [];
+        if (core.dashT > 0) parts.push(`冲刺 ${core.dashT.toFixed(0)}`);
+        if (core.shieldCharges > 0) parts.push('护盾 ●');
+        if (core.magnetT > 0) parts.push(`磁吸 ${core.magnetT.toFixed(0)}`);
+        if (core.doubleT > 0) parts.push(`×2 ${core.doubleT.toFixed(0)}`);
+        this.lblItems.string = parts.join(' · ');
 
         // 路口转向提示（窗口开启时显示方向箭头）
         if (core.state === 'run' && core.turnWindow) {

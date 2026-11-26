@@ -51,6 +51,16 @@ export interface CameraCfg {
     /** 跳跃高度跟随系数（0 关闭） */
     heightFollow: number;
 }
+export interface DifficultyCfg {
+    /** 难度满值里程（里）：D = min(li/rampLi, 1) */
+    rampLi: number;
+    /** 动态生成间隔绝对下限（逻辑单位） */
+    minInterval: number;
+    /** 反应时间守卫（秒）：生成间隔 ≥ 速度×此值 */
+    reactionGuard: number;
+    /** 可达性验证的最小反应时间（秒） */
+    reactionTime: number;
+}
 export interface MapCfg {
     /** 路径生成种子（同种子路径可复现） */
     seed: number;
@@ -110,6 +120,7 @@ export interface GameConfig {
     input: InputCfg;
     camera: CameraCfg;
     map: MapCfg;
+    difficulty: DifficultyCfg;
     spawn: SpawnCfg;
     obstacle: ObstacleCfg;
     death: DeathCfg;
@@ -138,6 +149,7 @@ export const DEFAULT_CONFIG: GameConfig = {
         bridgeChance: 0.08, cliffChance: 0.06, caveChance: 0.06, specialGap: 120,
         themeEvery: 400,
     },
+    difficulty: { rampLi: 6000, minInterval: 3, reactionGuard: 0.45, reactionTime: 0.3 },
     spawn: {
         rowInterval: 8, singleRowChance: 0.45, propInterval: 2.4,
         fragmentChance: 0.6, fragmentCount: 5, fragmentGap: 1.5, fragmentLead: 1.6,
@@ -173,6 +185,7 @@ const NUM_SECTIONS: Record<string, Record<string, NumRule>> = {
     },
     input: { swipeMin: { min: 1 }, tapMax: { min: 0 } },
     camera: { fovBase: { min: 20, max: 120 }, fovGain: { min: 0, max: 60 }, followLerp: { min: 0.1 }, heightFollow: { min: 0, max: 1 } },
+    difficulty: { rampLi: { min: 100 }, minInterval: { min: 0.5 }, reactionGuard: { min: 0.05 }, reactionTime: { min: 0.05 } },
     map: {
         seed: { integer: true, min: 0 }, horizon: { min: 60 }, recycleBehind: { min: 5 },
         straightMin: { min: 4 }, straightMax: { min: 4 },
@@ -208,7 +221,7 @@ export function validateConfig(raw: unknown): string[] {
     const hasOwn = (o: Record<string, unknown>, k: string) => Object.prototype.hasOwnProperty.call(o, k);
 
     // 顶层必填 section
-    for (const sec of ['renderMode', 'world', 'speed', 'player', 'input', 'camera', 'map', 'spawn', 'obstacle', 'death', 'milestone', 'ad', 'ui']) {
+    for (const sec of ['renderMode', 'world', 'speed', 'player', 'input', 'camera', 'map', 'difficulty', 'spawn', 'obstacle', 'death', 'milestone', 'ad', 'ui']) {
         if (!hasOwn(obj, sec)) errs.push(`缺少字段 ${sec}`);
     }
     if (errs.length) return errs;

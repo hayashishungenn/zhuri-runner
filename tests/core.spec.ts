@@ -17,7 +17,7 @@ function step(core: GameCore, n: number, dt = DT) {
 }
 
 function pushObstacle(core: GameCore, patch: Partial<Obstacle>): Obstacle {
-    const o: Obstacle = { lane: 0, type: 'rock', z: 0.6, passed: false, ...patch };
+    const o: Obstacle = { lane: 0, defId: 'rock', z: 0.6, passed: false, phase: 0, ...patch };
     core.obstacles.push(o);
     return o;
 }
@@ -136,7 +136,7 @@ describe('碰撞判定（Phase 1 受击分级）', () => {
     it('同车道 rock 未跳 → 受击踉跄（减速 + 豁免无敌 + 击碎障碍，不死亡）', () => {
         const c = makeCore();
         c.startRun();
-        const o = pushObstacle(c, { lane: 0, type: 'rock', z: 0.6 });
+        const o = pushObstacle(c, { lane: 0, defId: 'rock', z: 0.6 });
         step(c, 1);
         expect(c.state).toBe('run');
         expect(c.stumbling).toBe(true);
@@ -150,13 +150,13 @@ describe('碰撞判定（Phase 1 受击分级）', () => {
     it('踉跄中再撞 → 死亡', () => {
         const c = makeCore();
         c.startRun();
-        pushObstacle(c, { lane: 0, type: 'rock', z: 0.6 });
+        pushObstacle(c, { lane: 0, defId: 'rock', z: 0.6 });
         step(c, 1);
         expect(c.stumbling).toBe(true);
         // 豁免无敌 1.5s 内不会触发再撞判定的死亡路径？——踉跄期 1.8s > 豁免 1.5s，
         // 手动越过豁免窗口（推进时间）后再撞
         c.invincible = 0;
-        pushObstacle(c, { lane: 0, type: 'rock', z: 0.6 });
+        pushObstacle(c, { lane: 0, defId: 'rock', z: 0.6 });
         step(c, 1);
         expect(c.state).toBe('dying');
         expect(c.drainEvents().some((e) => e.type === 'crash')).toBe(true);
@@ -165,7 +165,7 @@ describe('碰撞判定（Phase 1 受击分级）', () => {
     it('撞墙始终即死（踉跄不适用）', () => {
         const c = makeCore();
         c.startRun();
-        pushObstacle(c, { lane: 0, type: 'wall', z: 0.6 });
+        pushObstacle(c, { lane: 0, defId: 'wall', z: 0.6 });
         step(c, 1);
         expect(c.state).toBe('dying');
         expect(c.timeScale).toBe(CFG.death.slowmo);
@@ -177,7 +177,7 @@ describe('碰撞判定（Phase 1 受击分级）', () => {
         cfg.player.stumble.enabled = false;
         const c = new GameCore(cfg, new SeededRng(1));
         c.startRun();
-        pushObstacle(c, { lane: 0, type: 'rock', z: 0.6 });
+        pushObstacle(c, { lane: 0, defId: 'rock', z: 0.6 });
         step(c, 1);
         expect(c.state).toBe('dying');
     });
@@ -185,7 +185,7 @@ describe('碰撞判定（Phase 1 受击分级）', () => {
     it('踉跄结束后速度恢复公式值', () => {
         const c = makeCore();
         c.startRun();
-        pushObstacle(c, { lane: 0, type: 'rock', z: 0.6 });
+        pushObstacle(c, { lane: 0, defId: 'rock', z: 0.6 });
         step(c, 1);
         expect(c.effectiveSpeed).toBeLessThan(c.speed);
         step(c, Math.ceil(CFG.player.stumble.duration / DT) + 2);
@@ -205,7 +205,7 @@ describe('碰撞判定（跳/冲窗口）', () => {
     it('同车道 rock 未跳 → 受击踉跄', () => {
         const c = makeCore();
         c.startRun();
-        pushObstacle(c, { lane: 0, type: 'rock', z: 0.6 });
+        pushObstacle(c, { lane: 0, defId: 'rock', z: 0.6 });
         step(c, 1);
         expect(c.stumbling).toBe(true);
     });
@@ -215,7 +215,7 @@ describe('碰撞判定（跳/冲窗口）', () => {
         c.startRun();
         c.doJump();
         c.jumpT = 0.5;             // ∈ (0.12, 0.88)
-        pushObstacle(c, { lane: 0, type: 'rock', z: 0.6 });
+        pushObstacle(c, { lane: 0, defId: 'rock', z: 0.6 });
         step(c, 1);
         expect(c.state).toBe('run');
         expect(c.drainEvents().some((e) => e.type === 'obstaclePassed')).toBe(true);
@@ -226,7 +226,7 @@ describe('碰撞判定（跳/冲窗口）', () => {
         c.startRun();
         c.doJump();
         c.jumpT = 0.95;            // > jumpSafeTo
-        pushObstacle(c, { lane: 0, type: 'rock', z: 0.6 });
+        pushObstacle(c, { lane: 0, defId: 'rock', z: 0.6 });
         step(c, 1);
         expect(c.stumbling).toBe(true);
         expect(c.state).toBe('run');
@@ -235,14 +235,14 @@ describe('碰撞判定（跳/冲窗口）', () => {
     it('同车道 log 需俯冲（未俯冲→踉跄；俯冲→安全）', () => {
         const c1 = makeCore();
         c1.startRun();
-        pushObstacle(c1, { lane: 0, type: 'log', z: 0.6 });
+        pushObstacle(c1, { lane: 0, defId: 'log', z: 0.6 });
         step(c1, 1);
         expect(c1.stumbling).toBe(true);
 
         const c2 = makeCore();
         c2.startRun();
         c2.doSlide();
-        pushObstacle(c2, { lane: 0, type: 'log', z: 0.6 });
+        pushObstacle(c2, { lane: 0, defId: 'log', z: 0.6 });
         step(c2, 1);
         expect(c2.state).toBe('run');
         expect(c2.stumbling).toBe(false);
@@ -253,7 +253,7 @@ describe('碰撞判定（跳/冲窗口）', () => {
         c.startRun();
         c.doJump();
         c.jumpT = 0.5;
-        pushObstacle(c, { lane: 0, type: 'wall', z: 0.6 });
+        pushObstacle(c, { lane: 0, defId: 'wall', z: 0.6 });
         step(c, 1);
         expect(c.state).toBe('dying');
     });
@@ -261,7 +261,7 @@ describe('碰撞判定（跳/冲窗口）', () => {
     it('不同车道安全', () => {
         const c = makeCore();
         c.startRun();
-        pushObstacle(c, { lane: 1, type: 'wall', z: 0.6 });
+        pushObstacle(c, { lane: 1, defId: 'wall', z: 0.6 });
         step(c, 1);
         expect(c.state).toBe('run');
     });
@@ -270,7 +270,7 @@ describe('碰撞判定（跳/冲窗口）', () => {
         const c = makeCore();
         c.startRun();
         c.invincible = 1;
-        const o = pushObstacle(c, { lane: 0, type: 'wall', z: 0.6 });
+        const o = pushObstacle(c, { lane: 0, defId: 'wall', z: 0.6 });
         step(c, 1);
         expect(c.state).toBe('run');
         expect(o.z).toBeLessThan(CFG.world.despawnZ);
@@ -280,7 +280,7 @@ describe('碰撞判定（跳/冲窗口）', () => {
     it('判定后障碍不再重复判定（passed）', () => {
         const c = makeCore();
         c.startRun();
-        const o = pushObstacle(c, { lane: 0, type: 'rock', z: 0.6 });
+        const o = pushObstacle(c, { lane: 0, defId: 'rock', z: 0.6 });
         step(c, 1);                // 安全通过
         c.doJump();
         c.jumpT = 0.5;
@@ -296,7 +296,7 @@ describe('死亡与复活', () => {
     function toDead(): GameCore {
         const c = makeCore();
         c.startRun();
-        pushObstacle(c, { lane: 0, type: 'wall', z: 0.6 });
+        pushObstacle(c, { lane: 0, defId: 'wall', z: 0.6 });
         step(c, 1);
         // 慢动作计时推进至死亡结算
         step(c, 600);              // 10s 充裕覆盖 dieDelay/dieRate/slowmo 曲线
@@ -306,7 +306,7 @@ describe('死亡与复活', () => {
     it('dying 期间障碍冻结', () => {
         const c = makeCore();
         c.startRun();
-        pushObstacle(c, { lane: 0, type: 'wall', z: 0.6 });
+        pushObstacle(c, { lane: 0, defId: 'wall', z: 0.6 });
         step(c, 1);                // crash（该帧 dist 已累计一次）
         expect(c.state).toBe('dying');
         const z = c.obstacles[0].z;
@@ -325,8 +325,8 @@ describe('死亡与复活', () => {
     it('复活：清近处障碍、无敌、回到 run', () => {
         const c = toDead();
         expect(c.reviveUsable()).toBe(true);
-        c.obstacles.push({ lane: 0, type: 'rock', z: 10, passed: true });
-        c.obstacles.push({ lane: 1, type: 'rock', z: 20, passed: true });
+        c.obstacles.push({ lane: 0, defId: 'rock', z: 10, passed: true, phase: 0 });
+        c.obstacles.push({ lane: 1, defId: 'rock', z: 20, passed: true, phase: 0 });
         c.revive();
         expect(c.state).toBe('run');
         expect(c.reviveUsed).toBe(true);
@@ -405,19 +405,18 @@ describe('生成规则（种子确定性）', () => {
         return { c, rows };
     }
 
-    it('同一行障碍 ≤ 2 个且车道不重复', () => {
+    it('同一行障碍 ≤ 2 个（Phase 3：可达性由验证器保证，允许同 pass 障碍重叠车道）', () => {
         const { rows } = simulate(120);
-        expect(rows.length).toBeGreaterThan(20);   // 采样足够
+        expect(rows.length).toBeGreaterThan(8);    // 采样足够（验证器拒绝重掷会抑制部分波）
         for (const r of rows) {
             expect(r.lanes.length).toBeLessThanOrEqual(2);
-            expect(new Set(r.lanes).size).toBe(r.lanes.length);
         }
     });
 
     it('障碍类型 ∈ {rock,log,wall}', () => {
         const { c } = simulate(30);
         for (const o of c.obstacles) {
-            expect(['rock', 'log', 'wall']).toContain(o.type);
+            expect(['rock', 'log', 'wall']).toContain(o.defId);
         }
     });
 
@@ -448,7 +447,7 @@ describe('生成规则（种子确定性）', () => {
             }
             return {
                 dist: c.dist, frags: c.frags, state: c.state,
-                ob: c.obstacles.map((o) => [o.lane, o.type, Math.round(o.z * 1000)]).sort(),
+                ob: c.obstacles.map((o) => [o.lane, o.defId, Math.round(o.z * 1000)]).sort(),
             };
         }
         const a = runScript(7), b = runScript(7), d = runScript(8);
@@ -459,7 +458,7 @@ describe('生成规则（种子确定性）', () => {
     it('障碍越过 despawnZ 被移除', () => {
         const c = makeCore();
         c.startRun();
-        pushObstacle(c, { lane: 0, type: 'rock', z: 0.3, passed: true });
+        pushObstacle(c, { lane: 0, defId: 'rock', z: 0.3, passed: true });
         step(c, 12);               // (0.3+2)/13 ≈ 0.18s → 12 帧
         expect(c.obstacles).toHaveLength(0);
     });

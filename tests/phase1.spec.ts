@@ -4,6 +4,7 @@ import { SeededRng } from '../assets/scripts/core/rng';
 import { SegmentPath } from '../assets/scripts/core/track';
 import { TrackSegment } from '../assets/scripts/core/track';
 import { DEFAULT_CONFIG as CFG } from '../assets/scripts/config/GameConfigSchema';
+import { defaultCatalog } from '../assets/scripts/config/ObstacleCatalog';
 import { validateConfig } from '../assets/scripts/config/GameConfigSchema';
 
 const DT = 0.016;
@@ -14,12 +15,18 @@ const CFG_STRAIGHT = (() => {
     c.map.specialGap = 1e9;
     return c;
 })();
+/** 无道具目录（磁吸/倍率会改变拾取语义，干扰帧率一致性度量） */
+const NO_ITEM_CATALOG = (() => {
+    const c = defaultCatalog();
+    c.spawn.itemChance = 0;
+    return c;
+})();
 
 function makeCore(seed = 42, turnsEnabled = false): GameCore {
     return new GameCore(CFG, new SeededRng(seed), { turnsEnabled });
 }
 function makeStraightCore(seed = 42): GameCore {
-    return new GameCore(CFG_STRAIGHT, new SeededRng(seed));
+    return new GameCore(CFG_STRAIGHT, new SeededRng(seed), { catalog: NO_ITEM_CATALOG });
 }
 function step(core: GameCore, n: number, dt = DT) {
     for (let i = 0; i < n; i++) core.update(dt);

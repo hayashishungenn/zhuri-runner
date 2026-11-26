@@ -63,6 +63,8 @@ export class MapGenerator {
     readonly corners: Corner[] = [];
     /** 累计生成的地块总数（trim 不影响，用于生成量统计/测试） */
     totalGenerated = 0;
+    /** 难度 [0,1]：转弯间隔上限随难度向 gapMin+20 收缩 */
+    difficulty = 0;
     private cfg: MapGenCfg;
     private rng: SeededRng;
     private cur: GenCursor;
@@ -116,7 +118,8 @@ export class MapGenerator {
         let radius = 0;
 
         // 1) 转弯判定：间隔到达上限强制转弯；到达下限后按权重
-        const mustTurn = c.turnsEnabled && this.sinceTurnD >= c.turnGapMax;
+        const gapMaxEff = c.turnGapMax + (c.turnGapMin + 20 - c.turnGapMax) * this.difficulty;
+        const mustTurn = c.turnsEnabled && this.sinceTurnD >= gapMaxEff;
         const mayTurn = c.turnsEnabled && this.sinceTurnD >= c.turnGapMin
             && this.rng.next() < 0.5
             && this.lastKind !== 'slopeUp' && this.lastKind !== 'slopeDown';

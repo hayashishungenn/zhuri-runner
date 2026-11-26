@@ -116,5 +116,11 @@
     "caveChance": 0.06,
     "specialGap": 120,
     "themeEvery": 400
+  },
+  "difficulty": {
+    "rampLi": 6000,
+    "minInterval": 3,
+    "reactionGuard": 0.45,
+    "reactionTime": 0.3
   }
 }
