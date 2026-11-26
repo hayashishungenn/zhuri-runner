@@ -6,7 +6,6 @@
 import { _decorator, Component, Color, error, game, Game as CCGame, sys } from 'cc';
 import { loadGameConfig, loadObstacleCatalog, loadSkins, loadTileTemplates } from './config/GameConfig';
 import { SkinCatalog } from './config/SkinCatalog';
-import { TileTemplateCatalog } from './config/TileTemplates';
 import { formatUi, GameConfig } from './config/GameConfigSchema';
 import { GameCore } from './core/GameCore';
 import { Logger } from './core/Logger';
@@ -16,7 +15,9 @@ import { Hud2D, HudButton } from './render/Hud2D';
 import { IRenderer } from './render/IRenderer';
 import { Renderer2D } from './render/Renderer2D';
 import { Renderer3D } from './render/Renderer3D';
-import { AdService, newAdService } from './platform/AdService';
+import { AdService, AdScene } from './platform/AdService';
+import { createPlatform } from './platform/PlatformFactory';
+import { MockRewardedAdapter, MockInterstitialAdapter } from './platform/mock/MockAdAdapter';
 import { installGlobalErrorHooks } from './platform/ErrorHooks';
 import { Save, defaultSaveData } from './platform/Save';
 import { AudioMgr, SfxName } from './audio/AudioMgr';
@@ -26,7 +27,7 @@ import { PlayerStats } from './core/PlayerStats';
 import { DailyQuests, QUEST_TEMPLATES } from './core/Quests';
 import { Achievements, ACHIEVEMENTS } from './core/Achievements';
 import { Upgrades, UpgradeKind, UPGRADE_DEFS, totalLevels } from './core/Upgrades';
-import { Tutorial, TUTORIAL_STEPS } from './core/Tutorial';
+import { Tutorial } from './core/Tutorial';
 
 const { ccclass } = _decorator;
 const log = new Logger('Game');
@@ -44,6 +45,7 @@ export class Game extends Component {
     private renderer: IRenderer | null = null;
     private inputCtl: InputController | null = null;
     private ad: AdService | null = null;
+    private platform!: ReturnType<typeof createPlatform>;
     private catalog: import('./config/ObstacleCatalog').ObstacleCatalog | null = null;
     private skins: SkinCatalog | null = null;
     private save: Save | null = null;
@@ -103,7 +105,19 @@ export class Game extends Component {
         void this.audio.load();
         log.info('配置加载成功 renderMode=' + cfg.renderMode + ' 障碍种类=' + catalog.obstacles.length);
         this.cfg = cfg;
-        this.ad = newAdService(cfg);
+        // 平台服务 + 广告（正式隔离：微信端只走平台适配器，mock 模式在微信端不发奖）
+        this.platform = createPlatform();
+        const lc = this.platform.lifecycle({ onHide: () => this.onGameHide(), onShow: () => this.onGameShow() });
+        if (!lc.supported) log.warn('平台生命周期不支持: ' + (lc.reason ?? '未知'));
+        const mockRewarded = this.platform.isWechat ? undefined : new MockRewardedAdapter();
+        const mockInterstitial = this.platform.isWechat ? undefined : new MockInterstitialAdapter();
+        this.ad = new AdService(this.platform, {
+            mode: cfg.ad.mode,
+            timeoutMs: cfg.ad.timeoutMs,
+            adUnitIds: cfg.ad.adUnitIds,
+            interstitialUnitId: cfg.ad.interstitialUnitId,
+            interstitial: cfg.ad.interstitial,
+        }, this.save.data.ads, mockRewarded, mockInterstitial);
         // 2D 渲染器需先于 Hud2D 创建节点，保证 UI 绘制在世界之上
         if (cfg.renderMode === '2d') this.renderer = new Renderer2D(this.node, cfg, catalog);
         this.hud = new Hud2D(this.node, cfg);
@@ -142,7 +156,6 @@ export class Game extends Component {
     update(dtRaw: number) {
         if (!this.core || !this.renderer || !this.hud || !this.ad) return;
         this.core.update(dtRaw);
-        this.ad.update(dtRaw);
         const events = this.core.drainEvents();
         // Phase 6：成长系统喂数（统计/任务进度/教程推进）
         this.stats.onEvents(events);
@@ -279,14 +292,84 @@ export class Game extends Component {
         this.audio?.playSfx('ui');
     }
 
-    /** 单局结算：金币事务、统计落账、存档 flush */
+    /** 单局结算：金币事务、统计落账、插屏（仅自然结束节点）、存档 flush */
     private settleRun() {
         const core = this.core!;
         const gold = Math.round(core.frags * this.upgrades.goldMul());
         const tx = `run:${core.mode}:${Date.now()}:${Math.floor(core.dist * 100)}`;
         this.economy.grant(tx, gold);
         this.stats.onRunSettle(core.li, core.frags, gold, core.state, core.themeIdx, core.themeIdx);
-        this.save?.flush();
+        this.ad?.stats.record('run_start', core.mode);
+        this.ad?.stats.record('run_end', core.mode);
+        // 插屏：仅在自然结算节点尝试（内部总开关/首局保护/冷却/频控）绝不打断奔跑
+        this.ad?.maybeShowInterstitial();
+        if (this.save) {
+            this.save.data.ads = this.ad!.stats.data;
+            this.save.flush();
+        }
+    }
+
+    /**
+     * 广告请求（5 场景）：死亡复活/结算翻倍/每日奖励翻倍/限时神通/皮肤试用。
+     * 仅 AdService 判定 isEnded=true 且事务未结算时才发奖；失败不阻断游戏。
+     */
+    private requestAd(scene: AdScene): void {
+        if (!this.ad || !this.save || !this.core) return;
+        const check = this.ad.canUse(scene);
+        if (!check.ok) {
+            // 明确不可用（未开通流量主/未配置广告位）——不伪造成功，不阻断游戏
+            this.hud?.showPop(LOGICAL_W / 2, 300, '广告暂不可用', false, new Color(255, 122, 106, 255));
+            return;
+        }
+        void this.ad.requestReward(scene, () => {
+            // ★ 回调只在此处发放一次（AdService 事务已防重放）
+            switch (scene) {
+            case 'revive':
+                    this.core!.revive();
+                    this.ad!.stats.record('revive', scene);
+                this.audio?.playSfx('revive');
+                break;
+            case 'doubleCoins': {
+                const bonus = Math.round(this.core!.frags * this.upgrades.goldMul());
+                this.economy.grant(`addouble:${Date.now()}`, bonus);
+                this.hud?.showPop(LOGICAL_W / 2, 300, `金币 ×2 +${bonus}`, true, new Color(255, 209, 102, 255));
+                break;
+            }
+            case 'dailyDouble': {
+                // 今日最优任务的奖励翻倍（事务幂等）
+                const tpl = this.quests.todays().find((t) => this.quests.isComplete(t) && !this.quests.isClaimed(t));
+                if (tpl && this.quests.claim(tpl, this.save!.data.quests.claimed)) {
+                        this.save!.data.quests.claimed.push(tpl.id);
+                        this.economy.grant(`addaily:${this.quests.state.date}:${tpl.id}`, tpl.reward * 2);
+                        this.refreshPage();
+                }
+                break;
+            }
+            case 'timedPower':
+                    // 下一局限时神通：磁吸+冲刺（不入存档，单次有效）
+                    this.core!.magnetT = Math.max(this.core!.magnetT, 12);
+                    this.core!.dashT = Math.max(this.core!.dashT, 3);
+                this.hud?.showPop(LOGICAL_W / 2, 300, '限时神通 · 获赠！', true, new Color(120, 200, 255, 255));
+                break;
+            case 'skinTrial': {
+                // 指定皮肤试用：本局下一皮肤（不改存档拥有权）
+                const next = (this.skinIdx + 1) % (this.skins?.skins.length ?? 1);
+                this.skinIdx = next;
+                this.applySkin();
+                this.hud?.setSkinIdx(next, this.skins?.skins.map((x) => x.label) ?? []);
+                this.hud?.showPop(LOGICAL_W / 2, 300, '皮肤试用 · 已启用', true, new Color(255, 207, 125, 255));
+                break;
+            }
+            }
+            this.save!.data.ads = this.ad!.stats.data;
+            this.save!.flush();
+        });
+    }
+
+    /** 回到前台：平台音频恢复（不影响暂停状态，由玩家手动继续） */
+    private onGameShow() {
+        const res = this.platform.resumeAudio();
+        if (!res.supported) log.warn('音频恢复不可用: ' + (res.reason ?? ''));
     }
 
     /** 新手教程启动：稀疏生成 + 顺序引导（可跳过） */
@@ -318,7 +401,7 @@ export class Game extends Component {
     private makeDelegate(): InputDelegate {
         return {
             onGesture: (intent: Intent) => {
-                if (!this.core || this.ad?.active) return;   // 广告展示期吞掉手势（与 P0 一致）
+                if (!this.core || this.ad?.state === 'showing') return;   // 广告展示期吞掉手势
                 this.hud?.markFirstInput();
                 switch (intent) {
                 case Intent.LaneLeft: this.core.doLane(-1); break;
@@ -328,7 +411,7 @@ export class Game extends Component {
                 }
             },
             onTap: (gx: number, gy: number) => {
-                if (!this.core || !this.hud || this.ad?.active) return;
+                if (!this.core || !this.hud || this.ad?.state === 'showing') return;
                 const btn = this.hud.hitTestButtons(gx, gy, this.core);
                 if (btn) this.onButton(btn);
                 else if (this.core.state === 'run') this.core.doJump();
@@ -533,11 +616,7 @@ export class Game extends Component {
             core.resume();
             break;
         case 'revive':
-                // 真机由 WxAdService 拉起 wx.createRewardedVideoAd（P4 接真实 adUnitId）
-                this.ad!.show(() => {
-                    core.revive();
-                    this.audio?.playSfx('revive');
-                });
+            this.requestAd('revive');
             break;
         case 'cycleSkin':
             if (core.state === 'title') this.cycleSkin();

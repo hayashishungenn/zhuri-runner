@@ -42,9 +42,10 @@ describe('validateConfig 拒绝非法配置', () => {
         expect(errs.some((e) => e.includes('renderMode'))).toBe(true);
     });
 
-    it('ad.mode=wx 而 adUnitId 为空', () => {
-        const errs = validateConfig(cloneWith((o) => { o.ad.mode = 'wx'; o.ad.adUnitId = ''; }));
-        expect(errs.some((e) => e.includes('adUnitId'))).toBe(true);
+    it('广告位 ID 未配置是合法状态（禁止编造正式广告位）', () => {
+        // Phase 7：空广告位表示"流量主未开通/未配置"，广告明确不可用，schema 不拒绝
+        const cfg = cloneWith((o) => { o.ad.mode = 'wx'; });
+        expect(validateConfig(cfg).filter((e) => e.includes('adUnitId'))).toHaveLength(0);
     });
 
     it('数值取值域（singleRowChance > 1）', () => {
@@ -93,3 +94,4 @@ describe('formatUi', () => {
         expect(formatUi('阳炎 × {n}', 0)).toBe('阳炎 × 0');
     });
 });
+

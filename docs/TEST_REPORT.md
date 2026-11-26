@@ -124,6 +124,20 @@
 
 回归：lint 0；type-check 0；微信构建成功（初始场景 0 错，main bundle 315KB，Save v2/Economy/Quests/Achievements/Upgrades/Tutorial 全部入包）。
 
+### Phase 7（任务书：微信适配与 IAA，2026-11-27）
+
+`npm test` → **180/180 通过**（170 → 180）：
+
+- 激励视频 6 项：成功/取消/加载展示失败/超时/重复回调/并发 duplicate
+- 场景与隔离 3 项：空广告位明确 noAdUnit、微信 mock 不发奖、5 场景 ID 独立
+- 插屏频控 1 项：总开关/首局保护/冷却/每日上限
+- 浏览器平台 4 项：分享明确不支持/广告不支持/存储可用/屏幕兜底
+- 配置语义 1 项：广告位空 ID 合法（禁止编造）
+
+回归：lint 0；type-check 0；微信构建成功（初始场景错误 0，main bundle 347KB，AdService/IPlatform/MockAdAdapter 全部入包）。
+
+真实广告验证**未执行**（阻塞：无合法广告位 ID，政策禁止编造；需后台开通后真机验证）。
+
 ### 待人工验证（无法自动化）
 
 - 微信开发者工具打开 `build/wechatgame`：CLI 依赖「服务端口」开启（当前未开启，报 `.cli` 缺失）与扫码登录

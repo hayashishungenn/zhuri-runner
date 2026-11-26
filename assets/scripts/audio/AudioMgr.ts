@@ -11,12 +11,6 @@ export type SfxName =
     | 'death' | 'revive' | 'dash' | 'staff' | 'leap' | 'water' | 'shield'
     | 'magnet' | 'double' | 'turn' | 'ui' | 'pity';
 
-const SFX: SfxName[] = [
-    'footstep_a', 'footstep_b', 'coin', 'jump', 'land', 'slide', 'hit',
-    'death', 'revive', 'dash', 'staff', 'leap', 'water', 'shield',
-    'magnet', 'double', 'turn', 'ui', 'pity',
-];
-
 export class AudioMgr {
     private root: Node;
     private bgmSource: AudioSource | null = null;

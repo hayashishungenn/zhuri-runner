@@ -14,7 +14,7 @@ assets/scripts/
 └── platform/          # AdService（mock / wx 激励视频）
 ```
 
-测试：`npm test`（vitest，170 项）；类型检查：`npm run type-check`；代码规范：`npm run lint`。
+测试：`npm test`（vitest，180 项）；类型检查：`npm run type-check`；代码规范：`npm run lint`。
 
 ## 首次打开
 1. 打开 `/Applications/CocosCreator/CocosCreator.app`
@@ -30,9 +30,10 @@ bash scripts/build-wechat.sh     # Creator CLI → build/wechatgame
 2. 开发者工具 设置 → 安全设置 → 打开服务端口（供 CLI/自动化）
 3. 预览 OK 后：开发者工具右上角「上传」→ mp.weixin.qq.com 提交审核
 
-## 广告接入（P4）
-`game-config.json` → `ad.mode`: `"mock"`（开发用倒计时）/ `"wx"`（真机激励视频，需填 `adUnitId`）。
-广告位 ID 在 mp 后台「流量主 → 广告位管理」创建（激励视频）。
+## 广告接入（Phase 7）
+`game-config.json` → `ad.mode`: `"mock"`（浏览器测试）/ `"wx"`（微信真机）。
+广告位 ID 在 mp 后台「流量主 → 广告位管理」创建，填入 `ad.adUnitIds`（revive/doubleCoins/dailyDouble/timedPower/skinTrial）与 `ad.interstitialUnitId`；**未取得合法 ID 前保持留空**（代码中不编造广告位，广告明确不可用）。
+微信环境 `mode='mock'` 被强制隔离——正式包不会通过测试广告发奖。
 
 ## 文档
 `docs/`：ROADMAP / GAME_DESIGN / ARCHITECTURE / PROGRESS / TEST_REPORT / ASSET_LICENSES / KNOWN_ISSUES / RELEASE_CHECKLIST

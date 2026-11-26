@@ -11,7 +11,7 @@ import { QUEST_TEMPLATES, DailyQuests, normalizeDate } from '../assets/scripts/c
 import { ACHIEVEMENTS, Achievements } from '../assets/scripts/core/Achievements';
 import { Upgrades, UPGRADE_DEFS, levelOf } from '../assets/scripts/core/Upgrades';
 import { Tutorial, TUTORIAL_STEPS } from '../assets/scripts/core/Tutorial';
-import { Save, parseSave, checksumOf, defaultSaveData, Storage, KEY_SAVE, KEY_SAVE_BAK, KEY_V1_BEST } from '../assets/scripts/platform/Save';
+import { Save, checksumOf, defaultSaveData, Storage, KEY_SAVE, KEY_V1_BEST } from '../assets/scripts/platform/Save';
 import { validateSkins } from '../assets/scripts/config/SkinCatalog';
 import { validateTileTemplates } from '../assets/scripts/config/TileTemplates';
 import { DEFAULT_CONFIG as CFG } from '../assets/scripts/config/GameConfigSchema';

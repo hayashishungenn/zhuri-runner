@@ -2,8 +2,6 @@
  * Quests —— 每日任务（Phase 6）：32 个模板按日期抽取 3 个，进度统计 + 幂等领取。
  * 日期切换自动刷新；时间回拨按同日处理（防刷）。零 cc 依赖。
  */
-import { StatsSaveState } from '../platform/Save';
-
 export type QuestMetric =
     | 'runLi' | 'totalLi' | 'runFrags' | 'totalFrags'
     | 'obstaclesPassed' | 'obstaclesSmashed'

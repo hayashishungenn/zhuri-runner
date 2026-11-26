@@ -331,7 +331,6 @@ describe('自动化跑酷模拟器（完美玩家 · 无必死组合验证）', 
         let totalDeaths = 0, totalTurns = 0, totalValidated = 0, totalRejected = 0;
         let waveReplays = 0;
         let replayFails = 0;
-        const replayFailed = false;
         for (let seed = 1; seed <= 1000; seed++) {
             let prev = new Set<GameCore['obstacles'][number]>();
             let prevWave: { d: number; lanes: number[]; pass: 'jump' | 'slide' | 'lane' }[] = [];

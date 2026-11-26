@@ -512,7 +512,9 @@ export class Hud2D {
         const showTitle = core.state === 'title';
         const showDead = core.state === 'dead';
         const showPaused = core.state === 'run' && core.paused;
-        const adShow = ad.active;
+        // 正式版不渲染模拟广告倒计时（平台广告自带 UI；模拟实现仅用于测试且隐藏）
+        const adShow = false;
+        void ad;
         if (showTitle || showDead || adShow || showPaused) {
             ui.fillColor = new Color(10, 8, 6, 180);
             ui.rect(-DESIGN_W / 2, -DESIGN_H / 2, DESIGN_W, DESIGN_H); ui.fill();
@@ -585,9 +587,6 @@ export class Hud2D {
             ui.fillColor = new Color(60, 46, 30, 200);
             ui.roundRect(LX(60), LY(525), 330 * 1.6, 50 * 1.6, 12 * 1.6); ui.fill();
         }
-        this.adOp.opacity = adShow ? 255 : 0;
-        if (adShow) {
-            this.lblAdC.string = ad.done ? '✓' : String(ad.stepsLeft);
-        }
+        this.adOp.opacity = 0;   // 广告浮层永久隐藏（正式平台广告自绘）
     }
 }

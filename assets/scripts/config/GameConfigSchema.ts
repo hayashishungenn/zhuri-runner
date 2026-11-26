@@ -129,7 +129,20 @@ export interface SpawnCfg {
 export interface ObstacleCfg { hitZ: number; pickupZFrom: number; pickupZTo: number; }
 export interface DeathCfg { slowmo: number; dieDelay: number; dieRate: number; slowmoRecover: number; ambientRecover: number; }
 export interface MilestoneCfg { step: number; liScale: number; skyRange: number; }
-export interface AdCfg { mode: AdMode; countdownSteps: number; stepDuration: number; adUnitId: string; }
+export interface AdCfg {
+    mode: AdMode;
+    /** 广告展示超时（毫秒） */
+    timeoutMs: number;
+    /** 按场景的广告位 ID（空 = 明确未配置，禁止编造） */
+    adUnitIds: Record<string, string>;
+    interstitialUnitId: string;
+    interstitial: {
+        enabled: boolean;
+        firstRunProtection: number;
+        cooldownMs: number;
+        maxPerDay: number;
+    };
+}
 export interface UiCfg {
     title: string; subtitle: string; hintSwipe: string; startBtn: string;
     deadTitle: string; reviveBtn: string; restartBtn: string; reviveNote: string;
@@ -209,7 +222,12 @@ export const DEFAULT_CONFIG: GameConfig = {
     obstacle: { hitZ: 0.55, pickupZFrom: -0.5, pickupZTo: 0.9 },
     death: { slowmo: 0.25, dieDelay: 0.95, dieRate: 2.8, slowmoRecover: 1.4, ambientRecover: 3 },
     milestone: { step: 1000, liScale: 3, skyRange: 30000 },
-    ad: { mode: 'mock', countdownSteps: 3, stepDuration: 0.85, adUnitId: '' },
+    ad: {
+        mode: 'mock', timeoutMs: 15000,
+        adUnitIds: { revive: '', doubleCoins: '', dailyDouble: '', timedPower: '', skinTrial: '' },
+        interstitialUnitId: '',
+        interstitial: { enabled: false, firstRunProtection: 1, cooldownMs: 180000, maxPerDay: 3 },
+    },
     ui: {
         title: '逐 日', subtitle: '夸父逐日 · 神话跑酷',
         hintSwipe: '左右滑动变道 · 上滑跳跃 · 下滑俯冲', startBtn: '【 起 跑 】',
@@ -264,7 +282,7 @@ const NUM_SECTIONS: Record<string, Record<string, NumRule>> = {
     obstacle: { hitZ: { min: -5 }, pickupZFrom: { min: -10 }, pickupZTo: { min: -10 } },
     death: { slowmo: { min: 0.01, max: 1 }, dieDelay: { min: 0.05 }, dieRate: { min: 0.1 }, slowmoRecover: { min: 0.01 }, ambientRecover: { min: 0.01 } },
     milestone: { step: { min: 1, integer: true }, liScale: { min: 0.01 }, skyRange: { min: 1 } },
-    ad: { countdownSteps: { min: 1, integer: true }, stepDuration: { min: 0.05 } },
+
 };
 
 /**
@@ -301,8 +319,24 @@ export function validateConfig(raw: unknown): string[] {
 
     const ad = obj.ad as Record<string, unknown>;
     if (ad.mode !== 'mock' && ad.mode !== 'wx') errs.push(`ad.mode 必须为 'mock'|'wx'，实际：${JSON.stringify(ad.mode)}`);
-    if (typeof ad.adUnitId !== 'string') errs.push('ad.adUnitId 必须为字符串');
-    if (ad.mode === 'wx' && !(ad.adUnitId as string).length) errs.push('ad.mode=wx 时 adUnitId 不能为空');
+    if (typeof ad.timeoutMs !== 'number' || ad.timeoutMs < 1000) errs.push('ad.timeoutMs 必须 ≥1000');
+    // 广告位 ID 允许为空（未开通流量主时明确不可用），但必须是字符串；禁止在代码中编造 ID
+    if (typeof ad.interstitialUnitId !== 'string') errs.push('ad.interstitialUnitId 必须为字符串');
+    if (typeof ad.adUnitIds !== 'object' || ad.adUnitIds === null) errs.push('ad.adUnitIds 必须为对象');
+    else {
+        for (const [k, v] of Object.entries(ad.adUnitIds as Record<string, unknown>)) {
+            if (typeof v !== 'string') errs.push(`ad.adUnitIds.${k} 必须为字符串`);
+        }
+    }
+    const ia = ad.interstitial as Record<string, unknown> | undefined;
+    if (typeof ia !== 'object' || ia === null) errs.push('ad.interstitial 缺失');
+    else {
+        if (typeof ia.enabled !== 'boolean') errs.push('ad.interstitial.enabled 必须为布尔');
+        if (typeof ia.firstRunProtection !== 'number' || ia.firstRunProtection < 0) errs.push('firstRunProtection 非法');
+        if (typeof ia.cooldownMs !== 'number' || ia.cooldownMs < 0) errs.push('cooldownMs 非法');
+        if (typeof ia.maxPerDay !== 'number' || ia.maxPerDay < 0) errs.push('maxPerDay 非法');
+    }
+    // 合规：mode=wx 不代表已取得广告位；缺少 ID 时广告明确不可用（不伪造成功）
 
     // 数值 section
     for (const [secName, rules] of Object.entries(NUM_SECTIONS)) {

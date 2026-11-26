@@ -5,6 +5,8 @@
  * - 迁移：v1 散键（zhuri.bestLi / zhuri.journeyDone）首次读入合并
  * - 不收集任何个人信息（仅游戏进度数值与设置）
  */
+import { AdStatsData } from '../core/AdStats';
+
 export interface Storage {
     get(key: string): string | null;
     set(key: string, value: string): void;
@@ -36,6 +38,7 @@ export interface StatsSaveState {
     goldEarned: number;
     coolRuns: number;            // 全程热量 <80 的完成次数
 }
+
 export interface SaveDataV2 {
     v: number;
     bestLi: number;
@@ -49,7 +52,13 @@ export interface SaveDataV2 {
     stats: StatsSaveState;
     settings: { muted: boolean };
     tutorial: { done: boolean; skipped: boolean };
+    /** Phase 7 商业化统计（本地，不上传） */
+    ads: AdStatsData;
     checksum?: string;
+}
+
+function defaultAdStats(): AdStatsData {
+    return { events: [], totals: { runs: 0, ends: 0, revives: 0, requests: 0, shows: 0, completes: 0, rewards: 0, fails: 0 } };
 }
 
 export function defaultSaveData(): SaveDataV2 {
@@ -71,6 +80,7 @@ export function defaultSaveData(): SaveDataV2 {
         },
         settings: { muted: false },
         tutorial: { done: false, skipped: false },
+        ads: defaultAdStats(),
     };
 }
 
@@ -82,7 +92,7 @@ export function checksumOf(s: string): string {
 }
 
 export function serializeSave(data: SaveDataV2): string {
-    const { checksum, ...rest } = data;
+    const { checksum: _checksum, ...rest } = data;
     const body = JSON.stringify(rest);
     return JSON.stringify({ ...rest, checksum: checksumOf(body) });
 }
@@ -104,6 +114,11 @@ export function parseSave(raw: string | null): SaveDataV2 | null {
             stats: { ...def.stats, ...(rest.stats ?? {}) },
             settings: { ...def.settings, ...(rest.settings ?? {}) },
             tutorial: { ...def.tutorial, ...(rest.tutorial ?? {}) },
+            ads: {
+                ...def.ads, ...(rest.ads ?? {}),
+                totals: { ...def.ads.totals, ...(rest.ads?.totals ?? {}) },
+                events: Array.isArray(rest.ads?.events) ? rest.ads!.events : [],
+            },
             skinsOwned: Array.isArray(rest.skinsOwned) ? rest.skinsOwned : def.skinsOwned,
             achClaimed: Array.isArray(rest.achClaimed) ? rest.achClaimed : [],
         };

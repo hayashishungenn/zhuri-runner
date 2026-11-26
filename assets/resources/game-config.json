@@ -72,9 +72,21 @@
   },
   "ad": {
     "mode": "mock",
-    "countdownSteps": 3,
-    "stepDuration": 0.85,
-    "adUnitId": ""
+    "timeoutMs": 15000,
+    "adUnitIds": {
+      "revive": "",
+      "doubleCoins": "",
+      "dailyDouble": "",
+      "timedPower": "",
+      "skinTrial": ""
+    },
+    "interstitialUnitId": "",
+    "interstitial": {
+      "enabled": false,
+      "firstRunProtection": 1,
+      "cooldownMs": 180000,
+      "maxPerDay": 3
+    }
   },
   "ui": {
     "title": "逐 日",

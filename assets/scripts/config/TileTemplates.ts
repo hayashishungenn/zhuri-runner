@@ -2,8 +2,6 @@
  * 地块模板目录 schema 与校验（Phase 5）。
  * 数据：assets/resources/tile-templates.json —— ≥40 种可复用模板，主题×基型×装饰组合。
  */
-import { JsonAsset, resources } from 'cc';
-
 export type DecorType = 'pillar' | 'arch' | 'post' | 'banner' | 'tree' | 'rock' | 'lantern' | 'reed' | 'crystal' | 'urn';
 export type TemplateKind = 'straight' | 'slopeUp' | 'slopeDown' | 'arcL' | 'arcR' | 'bridge' | 'cliff' | 'cave' | 'transition';
 

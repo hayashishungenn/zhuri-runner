@@ -15,7 +15,6 @@ import { SkinAccessory } from '../config/SkinCatalog';
 const HOP_U = 1.42;          // 跳跃高度（与 Renderer3D 尺度一致）
 
 const BODY: [number, number, number] = [26, 17, 10];
-const STAFF: [number, number, number] = [74, 44, 24];
 const DEG = 57.29578;
 
 export class ProceduralKuafu implements CharacterAnimator {

@@ -409,7 +409,7 @@ export class Renderer3D implements IRenderer {
             }
         };
         for (const dc of tpl.decor) {
-            const { mesh, h } = kindMesh(dc.t);
+            const { h } = kindMesh(dc.t);
             const dAbs = seg.startD + seg.length * dc.d;
             const yBase = seg.kind === 'bridge' ? this.core!.path.sample(dAbs, 0).y : 0;
             addDecor(dc.t, themeTint, dAbs, dc.lane, (n, p, dy) => {
