@@ -130,9 +130,11 @@ export class ProceduralKuafu implements CharacterAnimator {
             if (input.state === 'dead' && this.state !== 'dead') this.deadT = 0;
             this.state = input.state;
         }
+        const prevHop = this._lastHop;
         this._lastHop = input.jumpT >= 0 ? Math.sin(input.jumpT * Math.PI) * HOP_U : 0;
         const root = this.root3d;
-        root.setPosition(root.position.x, this._lastHop, 0);
+        const groundY = input.groundY ?? (root.position.y - prevHop);
+        root.setPosition(root.position.x, groundY + this._lastHop, root.position.z);
         this.yawDeg = input.yawDeg;
 
         switch (this.state) {

@@ -17,7 +17,6 @@ export class AudioMgr {
     private root: Node;
     private bgmSource: AudioSource | null = null;
     private windSource: AudioSource | null = null;
-    private sfxSource: AudioSource;
     private clips = new Map<string, AudioClip>();
     private muted = false;
     private sfxPool: AudioSource[] = [];
@@ -25,7 +24,6 @@ export class AudioMgr {
 
     constructor(parent: Node) {
         this.root = parent;
-        this.sfxSource = parent.addComponent(AudioSource);
     }
 
     /** 异步预加载全部音频（一次性） */
@@ -81,7 +79,9 @@ export class AudioMgr {
         this.muted = m;
         if (this.bgmSource) { if (m) this.bgmSource.stop(); else if (this.bgmSource.clip) this.bgmSource.play(); }
         if (this.windSource) { if (m) this.windSource.stop(); else if (this.windSource.clip) this.windSource.play(); }
-        if (m) this.sfxSource.stop();
+        if (m) {
+            for (const s of this.sfxPool) s.stop();
+        }
     }
 
     get isMuted(): boolean { return this.muted; }
@@ -117,15 +117,14 @@ export class AudioMgr {
     destroy(): void {
         this.bgmSource?.stop();
         this.windSource?.stop();
-        this.sfxSource.stop();
         for (const s of this.sfxPool) s.stop();
         this.bgmSource?.destroy();
         this.windSource?.destroy();
-        this.sfxSource.destroy();
         for (const s of this.sfxPool) s.destroy();
         this.sfxPool.length = 0;
         this.clips.clear();
         this.bgmSource = null;
         this.windSource = null;
+        this.loaded = false;
     }
 }

@@ -24,6 +24,13 @@ import { WorldShift } from '../core/WorldShift';
 import { SkinDef } from '../config/SkinCatalog';
 import { TileTemplate, DecorSpec } from '../config/TileTemplates';
 import { QUALITY_PRESETS } from './QualityPresets';
+import {
+    CharacterAssetProvider,
+    CharacterVisualHandle,
+    RenderResourceStats,
+    SceneAssetBinder,
+    toCharacterSkinVisual,
+} from './RenderContracts';
 
 /** 道具颜色（神通/道具统一配色） */
 const ITEM_TINT: Record<ItemKind, [number, number, number]> = {
@@ -81,7 +88,9 @@ export class Renderer3D implements IRenderer {
     private stars: { node: Node; phase: number; base: number }[] = [];
     private sunNodes: Node[] = [];
 
-    private kuafu!: ProceduralKuafu;
+    private kuafu!: CharacterVisualHandle<Node>;
+    private characterProvider?: CharacterAssetProvider<Node>;
+    private sceneBinder?: SceneAssetBinder<Node>;
     private segViews = new Map<TrackSegment, SegView>();
     private segNodePool: Node[] = [];
     private decorPools = new Map<string, Node[]>();
@@ -99,10 +108,16 @@ export class Renderer3D implements IRenderer {
         [40, 70, 34], [64, 110, 96], [150, 108, 52], [210, 170, 80],
     ];
 
-    constructor(cfg: GameConfig, catalog: ObstacleCatalog) {
+    constructor(
+        cfg: GameConfig,
+        catalog: ObstacleCatalog,
+        options?: { characterProvider?: CharacterAssetProvider<Node>; sceneBinder?: SceneAssetBinder<Node> },
+    ) {
         this.cfg = cfg;
         this.q = QUALITY_PRESETS[cfg.quality?.level ?? 'mid'] ?? QUALITY_PRESETS.mid;
         this.catalog = catalog;
+        this.characterProvider = options?.characterProvider;
+        this.sceneBinder = options?.sceneBinder;
         for (const d of catalog.obstacles) this.defMap.set(d.id, d);
         this.buildScene();
     }
@@ -179,7 +194,20 @@ export class Renderer3D implements IRenderer {
         this.buildSky(this.skyAnchor);
         this.buildGround();
         this.buildDashes();
-        this.kuafu = new ProceduralKuafu(this.makePart, this.root3d);
+        if (this.characterProvider) {
+            this.kuafu = this.characterProvider.createCharacter(this.root3d);
+        } else {
+            const proc = new ProceduralKuafu(this.makePart, this.root3d);
+            this.kuafu = {
+                get root() { return proc.root; },
+                get shadow() { return proc.shadow; },
+                get lastHop() { return proc.lastHop; },
+                update: (dt, input) => proc.update(dt, input),
+                applySkin: (skin) => proc.applySkin(skin.bodyTint, skin.staffTint, [...skin.accessories]),
+                setVisible: (v) => proc.setVisible(v),
+                destroy: () => proc.destroy(),
+            };
+        }
     }
 
     private buildSky(anchor: Node) {
@@ -460,10 +488,22 @@ export class Renderer3D implements IRenderer {
         if (!pool) { pool = []; this.pools.set(kind, pool); }
         pool.push(n);
     }
-    /** 实体节点工厂：障碍按目录 defId（vis 形态+配色+尺寸参数化），其余为场景实体/道具 */
+    /** 实体节点工厂：优先委托 SceneAssetBinder（正式美术资产），未命中时回退程序化几何体 */
     private createEntityNode(key: string): Node {
+        const themeIdx = this.core?.themeIdx ?? 0;
         const def = this.defMap.get(key);
-        if (def) return this.createObstacleNode(def);
+        if (def) {
+            const bound = this.sceneBinder?.createObstacleNode?.(this.root3d, def.id, themeIdx);
+            if (bound) return bound;
+            return this.createObstacleNode(def);
+        }
+        if (key === 'tree' || key === 'prock') {
+            const bound = this.sceneBinder?.createPropNode?.(this.root3d, key, themeIdx);
+            if (bound) return bound;
+        } else if (key !== 'frag') {
+            const bound = this.sceneBinder?.createItemNode?.(this.root3d, key);
+            if (bound) return bound;
+        }
         switch (key) {
         case 'frag': {
             const n = new Node('frag');
@@ -648,16 +688,73 @@ export class Renderer3D implements IRenderer {
             for (const m of view.meshes) m.destroy();
             view.meshes.length = 0;
             view.mesh = null;
+            for (const d of view.decors) d.destroy();
+            view.decors.length = 0;
+            view.node.destroy();
         }
+        this.segViews.clear();
+
+        // 释放全部对象池中已脱离场景树的节点，避免场景重建时节点泄漏
+        for (const list of this.pools.values()) {
+            for (const n of list) n.destroy();
+            list.length = 0;
+        }
+        this.pools.clear();
+        for (const list of this.decorPools.values()) {
+            for (const n of list) n.destroy();
+            list.length = 0;
+        }
+        this.decorPools.clear();
+        for (const n of this.segNodePool) n.destroy();
+        this.segNodePool.length = 0;
+        for (const n of this.puffPool) n.destroy();
+        this.puffPool.length = 0;
+        this.puffs.length = 0;
+        this.obRecs.clear();
+        this.fragRecs.clear();
+        this.itemRecs.clear();
+        this.propRecs.clear();
+
         for (const mesh of [this.mBox, this.mSphere, this.mCone, this.mCyl, this.mQuad]) mesh?.destroy();
+        for (const mat of this.matCache.values()) mat.destroy();
+        this.matCache.clear();
+
         this.kuafu.destroy();
         this.root3d?.destroy();
-        this.matCache.clear();
+    }
+
+    /** 渲染层运行时资源统计（开发期监控与泄漏校验） */
+    getResourceStats(): RenderResourceStats {
+        let dynamicSegmentMeshes = 0;
+        for (const view of this.segViews.values()) dynamicSegmentMeshes += view.meshes.length;
+        let pooledEntityNodes = 0;
+        for (const list of this.pools.values()) pooledEntityNodes += list.length;
+        let pooledDecorNodes = 0;
+        for (const list of this.decorPools.values()) pooledDecorNodes += list.length;
+        return {
+            activeSegments: this.segViews.size,
+            activeObstacles: this.obRecs.size,
+            activeFragments: this.fragRecs.size,
+            activeItems: this.itemRecs.size,
+            activeProps: this.propRecs.size,
+            activePuffs: this.puffs.length,
+            dynamicSegmentMeshes,
+            cachedMaterials: this.matCache.size,
+            pooledEntityNodes,
+            pooledDecorNodes,
+            pooledSegmentNodes: this.segNodePool.length,
+            pooledPuffNodes: this.puffPool.length,
+        };
     }
 
     /** 换肤透传（角色重建，材质独立实例） */
-    applySkin(skin: { bodyTint: [number, number, number]; staffTint: [number, number, number]; accessories: SkinDef['accessories'] }): void {
-        this.kuafu.applySkin(skin.bodyTint, skin.staffTint, skin.accessories);
+    applySkin(skin: { id?: string; bodyTint: [number, number, number]; staffTint: [number, number, number]; accessories: SkinDef['accessories'] }): void {
+        this.kuafu.applySkin(toCharacterSkinVisual({
+            id: skin.id ?? 'custom',
+            bodyTint: skin.bodyTint,
+            staffTint: skin.staffTint,
+            accessories: skin.accessories,
+        }));
     }
 
     // ---------- 摆放（全部经 path.sample + WorldShift） ----------
@@ -723,6 +820,7 @@ export class Renderer3D implements IRenderer {
             stumbleT: core.stumbleTimer,
             gTime: core.gTime,
             yawDeg: p.heading * DEG,
+            groundY: r.y,
         });
         this.kuafu.shadow.setPosition(r.x, r.y + 0.02, r.z);
     }

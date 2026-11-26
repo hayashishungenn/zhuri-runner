@@ -27,6 +27,8 @@ export interface AnimInput {
     gTime: number;
     /** 航向角（度，Phase 2 转弯后角色世界朝向） */
     yawDeg: number;
+    /** 地面高度（世界 Y，斜坡/断桥等高低起伏地形；缺省时沿用当前基础高度） */
+    groundY?: number;
 }
 
 export interface CharacterAnimator {
