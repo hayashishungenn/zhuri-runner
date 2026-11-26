@@ -6,6 +6,8 @@
  */
 import { AudioClip, AudioSource, resources, Node } from 'cc';
 
+const MAX_SFX_SOURCES = 8;
+
 export type SfxName =
     | 'footstep_a' | 'footstep_b' | 'coin' | 'jump' | 'land' | 'slide' | 'hit'
     | 'death' | 'revive' | 'dash' | 'staff' | 'leap' | 'water' | 'shield'
@@ -99,9 +101,31 @@ export class AudioMgr {
         for (const s of this.sfxPool) {
             if (!s.playing) return s;
         }
+        if (this.sfxPool.length >= MAX_SFX_SOURCES) {
+            // 池满：抢占最早实例，避免长时游戏每帧新增 AudioSource
+            const s = this.sfxPool[0];
+            s.stop();
+            return s;
+        }
         const s = this.root.addComponent(AudioSource);
         s.playOnAwake = false;
         this.sfxPool.push(s);
         return s;
+    }
+
+    /** 场景销毁：停止并释放全部音频组件与缓存 */
+    destroy(): void {
+        this.bgmSource?.stop();
+        this.windSource?.stop();
+        this.sfxSource.stop();
+        for (const s of this.sfxPool) s.stop();
+        this.bgmSource?.destroy();
+        this.windSource?.destroy();
+        this.sfxSource.destroy();
+        for (const s of this.sfxPool) s.destroy();
+        this.sfxPool.length = 0;
+        this.clips.clear();
+        this.bgmSource = null;
+        this.windSource = null;
     }
 }

@@ -28,7 +28,10 @@ export class Economy {
         if (this.txLog.has(txId)) return 0;
         this.txLog.add(txId);
         this.txOrder.push(txId);
-        if (this.txOrder.length > this.maxLog) this.txOrder.shift();
+        if (this.txOrder.length > this.maxLog) {
+            const old = this.txOrder.shift();
+            if (old !== undefined) this.txLog.delete(old);   // 与有界日志同步，防止 Set 无界增长
+        }
         const amt = Math.floor(amount);
         this.gold += amt;
         this.goldEarned += amt;

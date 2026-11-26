@@ -49,8 +49,8 @@ export class ProceduralKuafu implements CharacterAnimator {
     build(parent: Node, bodyTint: [number, number, number], staffTint: [number, number, number],
         accessories: SkinAccessory[]) {
         const wasActive = this.root3d ? this.root3d.active : true;
-        if (this.root3d) this.root3d.destroy();
-        for (const a of this.accessories) a.destroy();
+        if (this.root3d) this.root3d.destroy();   // 配件是 root 子节点，随父一并销毁
+        if (this.shadow3d) this.shadow3d.destroy();
         this.accessories = [];
 
         this.root3d = new Node('kuafu');

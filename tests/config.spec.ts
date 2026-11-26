@@ -42,6 +42,13 @@ describe('validateConfig 拒绝非法配置', () => {
         expect(errs.some((e) => e.includes('renderMode'))).toBe(true);
     });
 
+    it('quality.level 枚举（低/中/高画质档位）', () => {
+        expect(validateConfig(cloneWith((o) => { o.quality.level = 'ultra'; })).some((e) => e.includes('quality.level'))).toBe(true);
+        for (const lv of ['low', 'mid', 'high']) {
+            expect(validateConfig(cloneWith((o) => { o.quality.level = lv; })).filter((e) => e.includes('quality.level'))).toHaveLength(0);
+        }
+    });
+
     it('广告位 ID 未配置是合法状态（禁止编造正式广告位）', () => {
         // Phase 7：空广告位表示"流量主未开通/未配置"，广告明确不可用，schema 不拒绝
         const cfg = cloneWith((o) => { o.ad.mode = 'wx'; });

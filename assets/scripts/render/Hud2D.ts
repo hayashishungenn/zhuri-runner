@@ -8,7 +8,7 @@ import { GameCore } from '../core/GameCore';
 import { AdService } from '../platform/AdService';
 import { DESIGN_W, DESIGN_H, LX, LY } from './layout';
 
-export type HudButton = 'start' | 'startJourney' | 'revive' | 'restart' | 'mute' | 'pause' | 'resume' | 'cycleSkin';
+export type HudButton = 'start' | 'startJourney' | 'revive' | 'doubleCoins' | 'restart' | 'mute' | 'pause' | 'resume' | 'cycleSkin';
 
 /** P0 面板色板（美术常量，非玩法参数） */
 const C_MAIN = () => new Color(255, 207, 125, 255);
@@ -27,7 +27,8 @@ const HIT = {
     start: { x0: 80, x1: 370, y0: 440, y1: 482 },
     startJourney: { x0: 80, x1: 370, y0: 488, y1: 532 },
     revive: { x0: 60, x1: 390, y0: 465, y1: 500 },
-    restart: { x0: 60, x1: 390, y0: 525, y1: 560 },
+    doubleCoins: { x0: 60, x1: 390, y0: 502, y1: 532 },
+    restart: { x0: 60, x1: 390, y0: 540, y1: 575 },
 };
 
 interface PopSlot { lbl: Label; op: UIOpacity; t: number; }
@@ -46,6 +47,7 @@ export class Hud2D {
     private lblPFrag!: Label;
     private lblPBtn1!: Label;
     private lblPBtn2!: Label;
+    private lblPBtn3!: Label;
     private lblPNote!: Label;
     private lblAdT!: Label;
     private lblAdC!: Label;
@@ -122,7 +124,10 @@ export class Hud2D {
         pb1.node.setPosition(0, LY(490), 0);
         const pb2 = this.makeLabel(parent, 'pBtn2', 24, C_BTN2());
         pb2.lbl.string = cfg.ui.restartBtn; this.lblPBtn2 = pb2.lbl;
-        pb2.node.setPosition(0, LY(540), 0);
+        pb2.node.setPosition(0, LY(555), 0);
+        const pb3 = this.makeLabel(parent, 'pBtn3', 20, C_BTN2());
+        pb3.lbl.string = '看广告 · 金币 ×2'; this.lblPBtn3 = pb3.lbl;
+        pb3.node.setPosition(0, LY(517), 0);
         const pn = this.makeLabel(parent, 'pNote', 14, C_NOTE());
         pn.lbl.string = cfg.ui.reviveNote; this.lblPNote = pn.lbl;
         pn.node.setPosition(0, LY(600), 0);
@@ -137,6 +142,8 @@ export class Hud2D {
         an.lbl.string = cfg.ui.adNote; this.lblAdN = an.lbl;
         an.node.setPosition(0, LY(470), 0);
         this.adOp.opacity = 0;
+        // 正式平台广告自绘；旧模拟广告浮层节点必须整体隐藏，不能只把 opacity 置 0
+        at.node.active = false; ac.node.active = false; an.node.active = false;
 
         // 速度显示（Phase 1）
         const sp = this.makeLabel(parent, 'hSpeed', 22, C_WHITE());
@@ -200,8 +207,8 @@ export class Hud2D {
             row.node.active = false;
             this.lblPageRows.push(row.lbl);
         }
-        // 标题功能导航（6 项 + 教程）
-        ['任务', '成就', '商店', '强化', '纪录', '设置', '教程'].forEach((t, i) => {
+        // 标题功能导航（6 项 + 教程 + 广告奖励）
+        ['任务', '成就', '商店', '强化', '纪录', '设置', '教程', '奖励'].forEach((t, i) => {
             const n = this.makeLabel(parent, `nav${i}`, 18, new Color(232, 210, 170, 235));
             n.lbl.string = t;
             n.node.setPosition(LX(95 + (i % 4) * 108), LY(612 + Math.floor(i / 4) * 34), 0);
@@ -262,6 +269,7 @@ export class Hud2D {
         }
         if (core.state === 'dead') {
             if (core.reviveUsable() && inRect(HIT.revive)) return 'revive';
+            if (inRect(HIT.doubleCoins)) return 'doubleCoins';
             if (inRect(HIT.restart)) return 'restart';
         }
         return null;
@@ -303,7 +311,8 @@ export class Hud2D {
             const lbl = this.lblPageRows[i];
             lbl.string = r.label;
             lbl.node.active = true;
-            if (r.action) this.pageTapZones.push({ y0: LY(300 + i * 44) - 16, y1: LY(300 + i * 44) + 16, action: r.action });
+            // pageTap 接收逻辑坐标：命中区必须同坐标系，不能用 LY 设计坐标
+            if (r.action) this.pageTapZones.push({ y0: 300 + i * 44 - 16, y1: 300 + i * 44 + 16, action: r.action });
         });
         for (let i = rows.length; i < this.lblPageRows.length; i++) this.lblPageRows[i].node.active = false;
     }
@@ -351,6 +360,7 @@ export class Hud2D {
             { x0: 158, x1: 274, y0: 592, y1: 628, page: 'records' },
             { x0: 282, x1: 398, y0: 592, y1: 628, page: 'settings' },
             { x0: 34, x1: 150, y0: 632, y1: 668, page: 'tutorial' },
+            { x0: 282, x1: 398, y0: 632, y1: 668, page: 'adrewards' },
         ];
         for (const z of zones) if (gx > z.x0 && gx < z.x1 && gy > z.y0 && gy < z.y1) return z.page;
         return null;
@@ -577,6 +587,10 @@ export class Hud2D {
             ui.rect(-DESIGN_W / 2, -DESIGN_H / 2, DESIGN_W, DESIGN_H); ui.fill();
         }
         this.panelOp.opacity = showDead ? 255 : 0;
+        for (const l of [this.lblPTitle, this.lblPDist, this.lblPFrag, this.lblPBtn1, this.lblPBtn2, this.lblPBtn3, this.lblPNote]) {
+            l.node.active = showDead;
+        }
+        this.lblPBtn1.node.active = showDead && core.reviveUsable();
         if (showDead) {
             this.lblPDist.string = formatUi(this.cfg.ui.deadDistLabel, Math.floor(core.li));
             this.lblPFrag.string = formatUi(this.cfg.ui.deadFragLabel, core.frags);
@@ -585,7 +599,8 @@ export class Hud2D {
                 ui.roundRect(LX(60), LY(465), 330 * 1.6, 50 * 1.6, 12 * 1.6); ui.fill();
             }
             ui.fillColor = new Color(60, 46, 30, 200);
-            ui.roundRect(LX(60), LY(525), 330 * 1.6, 50 * 1.6, 12 * 1.6); ui.fill();
+            ui.roundRect(LX(60), LY(502), 330 * 1.6, 30 * 1.6, 10 * 1.6); ui.fill();   // 金币 ×2
+            ui.roundRect(LX(60), LY(540), 330 * 1.6, 35 * 1.6, 10 * 1.6); ui.fill();   // 重新开始
         }
         this.adOp.opacity = 0;   // 广告浮层永久隐藏（正式平台广告自绘）
     }

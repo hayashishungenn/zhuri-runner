@@ -5,7 +5,7 @@
  * - 迁移：v1 散键（zhuri.bestLi / zhuri.journeyDone）首次读入合并
  * - 不收集任何个人信息（仅游戏进度数值与设置）
  */
-import { AdStatsData } from '../core/AdStats';
+import { AdStatsData, defaultAdStats, mergeAdStats } from '../core/AdStats';
 
 export interface Storage {
     get(key: string): string | null;
@@ -44,6 +44,8 @@ export interface SaveDataV2 {
     bestLi: number;
     journeyDone: boolean;
     gold: number;
+    /** 经济事务日志（跨会话防重复领取；上限 512） */
+    txLog: string[];
     skinsOwned: string[];        // 已解锁皮肤 id（'kuafu' 默认拥有）
     skin: string;                // 当前皮肤 id
     upgrades: UpgradeSaveState;
@@ -57,16 +59,13 @@ export interface SaveDataV2 {
     checksum?: string;
 }
 
-function defaultAdStats(): AdStatsData {
-    return { events: [], totals: { runs: 0, ends: 0, revives: 0, requests: 0, shows: 0, completes: 0, rewards: 0, fails: 0 } };
-}
-
 export function defaultSaveData(): SaveDataV2 {
     return {
         v: 2,
         bestLi: 0,
         journeyDone: false,
         gold: 0,
+        txLog: [],
         skinsOwned: ['kuafu'],
         skin: 'kuafu',
         upgrades: {},
@@ -114,11 +113,8 @@ export function parseSave(raw: string | null): SaveDataV2 | null {
             stats: { ...def.stats, ...(rest.stats ?? {}) },
             settings: { ...def.settings, ...(rest.settings ?? {}) },
             tutorial: { ...def.tutorial, ...(rest.tutorial ?? {}) },
-            ads: {
-                ...def.ads, ...(rest.ads ?? {}),
-                totals: { ...def.ads.totals, ...(rest.ads?.totals ?? {}) },
-                events: Array.isArray(rest.ads?.events) ? rest.ads!.events : [],
-            },
+            ads: mergeAdStats(rest.ads),
+            txLog: Array.isArray(rest.txLog) ? rest.txLog.slice(-512) : [],
             skinsOwned: Array.isArray(rest.skinsOwned) ? rest.skinsOwned : def.skinsOwned,
             achClaimed: Array.isArray(rest.achClaimed) ? rest.achClaimed : [],
         };
@@ -139,7 +135,7 @@ export class Save {
     private load(): SaveDataV2 {
         // 主档 → 备份 → v1 迁移 → 默认
         const main = parseSave(this.storage.get(KEY_SAVE));
-        if (main) { this.data = main; return main; }
+        if (main) return main;
         const bak = parseSave(this.storage.get(KEY_SAVE_BAK));
         if (bak) { this.data = bak; this.flush(); return bak; }
         // v1 迁移
@@ -152,10 +148,10 @@ export class Save {
         return def;
     }
 
-    /** 主档写入 + 旧主档转入备份槽 */
+    /** 主档写入 + 仅将「有效」旧主档转入备份槽（防止损坏档覆盖唯一备份） */
     flush(): void {
         const cur = this.storage.get(KEY_SAVE);
-        if (cur !== null) this.storage.set(KEY_SAVE_BAK, cur);
+        if (cur !== null && parseSave(cur)) this.storage.set(KEY_SAVE_BAK, cur);
         this.storage.set(KEY_SAVE, serializeSave(this.data));
     }
 

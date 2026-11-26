@@ -6,6 +6,12 @@
 
 export type RenderMode = '2d' | '3d';
 export type AdMode = 'mock' | 'wx';
+export type QualityLevel = 'low' | 'mid' | 'high';
+
+export interface QualityCfg {
+    /** 画质档位：控制网格分段/星数/粒子/装饰密度；不影响玩法判定 */
+    level: QualityLevel;
+}
 
 export interface WorldCfg {
     laneCount: number;
@@ -157,6 +163,7 @@ export interface UiCfg {
 }
 export interface GameConfig {
     renderMode: RenderMode;
+    quality: QualityCfg;
     world: WorldCfg;
     speed: SpeedCfg;
     player: PlayerCfg;
@@ -178,6 +185,7 @@ export interface GameConfig {
 /** P0 原型实测数值（唯一真源，JSON 与此一致；仅测试兜底使用） */
 export const DEFAULT_CONFIG: GameConfig = {
     renderMode: '3d',
+    quality: { level: 'mid' },
     world: { laneCount: 3, laneWidth: 110, runwayHalf: 190, spawnZ: 46, despawnZ: -2 },
     speed: { base: 13, gain: 0.045, gainCap: 16 },
     player: {
@@ -297,13 +305,17 @@ export function validateConfig(raw: unknown): string[] {
     const hasOwn = (o: Record<string, unknown>, k: string) => Object.prototype.hasOwnProperty.call(o, k);
 
     // 顶层必填 section
-    for (const sec of ['renderMode', 'world', 'speed', 'player', 'input', 'camera', 'map', 'difficulty', 'heat', 'journey', 'themes', 'spawn', 'obstacle', 'death', 'milestone', 'ad', 'ui']) {
+    for (const sec of ['renderMode', 'quality', 'world', 'speed', 'player', 'input', 'camera', 'map', 'difficulty', 'heat', 'journey', 'themes', 'spawn', 'obstacle', 'death', 'milestone', 'ad', 'ui']) {
         if (!hasOwn(obj, sec)) errs.push(`缺少字段 ${sec}`);
     }
     if (errs.length) return errs;
 
     // renderMode / ad.mode 枚举
     if (obj.renderMode !== '2d' && obj.renderMode !== '3d') errs.push(`renderMode 必须为 '2d'|'3d'，实际：${JSON.stringify(obj.renderMode)}`);
+    const q = obj.quality as Record<string, unknown>;
+    if (typeof q !== 'object' || q === null || !['low', 'mid', 'high'].includes(String(q.level))) {
+        errs.push(`quality.level 必须为 'low'|'mid'|'high'，实际：${JSON.stringify(q)}`);
+    }
     const pl = obj.player as Record<string, unknown>;
     const st = pl.stumble as Record<string, unknown> | undefined;
     if (typeof st !== 'object' || st === null) errs.push('player.stumble 必须是对象');

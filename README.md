@@ -14,7 +14,7 @@ assets/scripts/
 └── platform/          # AdService（mock / wx 激励视频）
 ```
 
-测试：`npm test`（vitest，180 项）；类型检查：`npm run type-check`；代码规范：`npm run lint`。
+测试：`npm test`（vitest，217 项）；类型检查：`npm run type-check`；代码规范：`npm run lint`。
 
 ## 首次打开
 1. 打开 `/Applications/CocosCreator/CocosCreator.app`
@@ -36,4 +36,4 @@ bash scripts/build-wechat.sh     # Creator CLI → build/wechatgame
 微信环境 `mode='mock'` 被强制隔离——正式包不会通过测试广告发奖。
 
 ## 文档
-`docs/`：ROADMAP / GAME_DESIGN / ARCHITECTURE / PROGRESS / TEST_REPORT / ASSET_LICENSES / KNOWN_ISSUES / RELEASE_CHECKLIST
+`docs/`：ROADMAP / GAME_DESIGN / ARCHITECTURE / PROGRESS / TEST_REPORT / PHASE8_REPORT / ASSET_LICENSES / KNOWN_ISSUES / RELEASE_CHECKLIST

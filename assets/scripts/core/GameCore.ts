@@ -235,8 +235,9 @@ export class GameCore {
         return this.mapGen.corners.find((c) => Math.abs(c.d - d) < 0.5);
     }
 
-    /** 死亡结算后的复活（广告发奖回调触发） */
-    revive() {
+    /** 死亡结算后的复活（广告发奖回调触发）；异步回调到达时必须重新校验状态 */
+    revive(): boolean {
+        if (this.reviveUsed || this.state !== 'dead') return false;
         this.reviveUsed = true;
         // 清除近处障碍（z <= reviveKeepZ），保留远景
         this.obstacles = this.obstacles.filter((o) => o.z > this.cfg.player.reviveKeepZ);
@@ -245,6 +246,7 @@ export class GameCore {
         this.slowTimer = 0; this.slowFactor = 1;
         this.state = 'run';
         this.timeScale = 1;
+        return true;
     }
 
     private reset() {
@@ -348,24 +350,23 @@ export class GameCore {
             const themeMul = this.themeNow.heatMul;
             this.heat = Math.min(100, this.heat + c.heat.baseRate * themeMul * (1 + c.heat.dScale * this.difficulty) * this.mods.heatResist * dt);
         }
-        if (this.li >= this.milestone) {
+        // 单帧跨越多个里程碑时必须逐次补发（原 if 会丢事件，成就/文案永久漏记）
+        while (this.li >= this.milestone) {
             this.events.push({ type: 'milestone', n: this.milestone });
             this.milestone += c.milestone.step;
         }
         // 征途阶段与通关（仅征途模式）
         if (this.mode === 'journey') {
             const stages = c.journey.stages;
-            if (this.journeyStage < stages.length) {
+            while (this.journeyStage < stages.length && this.li >= stages[this.journeyStage].goalLi) {
                 const st = stages[this.journeyStage];
-                if (this.li >= st.goalLi) {
-                    this.journeyStage++;
-                    this.events.push({ type: 'stage', n: this.journeyStage, label: st.label });
-                    if (this.journeyStage >= stages.length) {
-                        this.state = 'ended';                       // 通关：逐日功成
-                        this.events.push({ type: 'journeyDone' });
-                        return;
-                    }
-                }
+                this.journeyStage++;
+                this.events.push({ type: 'stage', n: this.journeyStage, label: st.label });
+            }
+            if (this.journeyStage >= stages.length) {
+                this.state = 'ended';                               // 通关：逐日功成
+                this.events.push({ type: 'journeyDone' });
+                return;
             }
         }
         if (this.invincible > 0) this.invincible -= dt;
@@ -731,7 +732,7 @@ export class GameCore {
         const def = this.catalog.items.find((x) => x.id === kind);
         const dur = def?.duration ?? 0;
         switch (kind) {
-        case 'magnet': this.magnetT = Math.max(this.magnetT, dur); break;   // 同类延长
+        case 'magnet': this.magnetT = Math.max(this.magnetT, dur + this.mods.magnetBonus); break;   // 同类延长（含强化）
         case 'double': this.doubleT = Math.max(this.doubleT, dur); break;
         case 'dash': this.dashT = Math.max(this.dashT, dur); break;          // 替换剩余
         case 'shield': this.shieldCharges = Math.max(this.shieldCharges, 1); break;  // 不叠加
@@ -743,7 +744,7 @@ export class GameCore {
             this.events.push({ type: 'water' });
             break;
         case 'staff':
-            this.staffCharges = Math.min(this.staffCharges + 3, 6);           // 桃木神杖：+3 层，上限 6
+            this.staffCharges = Math.min(this.staffCharges + 3, 6 + this.mods.staffCapBonus); // 上限含强化
             break;
         case 'leap':
             this.leapT = Math.max(this.leapT, dur);                           // 巨人之跃：同类延长

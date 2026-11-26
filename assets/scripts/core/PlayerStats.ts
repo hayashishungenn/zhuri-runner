@@ -47,6 +47,7 @@ export class PlayerStats {
         if (state === 'ended') {
             // 通关且全程未触发热警戒
             this.stats.coolRuns++;
+            this.stats.itemUses.journey = (this.stats.itemUses.journey ?? 0) + 1;
             this.stats.themeVisited = Array.from(new Set([...this.stats.themeVisited, 0, 1, 2, 3]));
         } else if (maxThemeVisited >= 0) {
             this.stats.themeVisited = Array.from(new Set([...this.stats.themeVisited, maxThemeVisited]));

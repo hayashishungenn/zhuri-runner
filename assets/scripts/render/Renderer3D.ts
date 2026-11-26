@@ -23,6 +23,7 @@ import { ProceduralKuafu } from './ProceduralKuafu';
 import { WorldShift } from '../core/WorldShift';
 import { SkinDef } from '../config/SkinCatalog';
 import { TileTemplate, DecorSpec } from '../config/TileTemplates';
+import { QUALITY_PRESETS } from './QualityPresets';
 
 /** 道具颜色（神通/道具统一配色） */
 const ITEM_TINT: Record<ItemKind, [number, number, number]> = {
@@ -51,15 +52,18 @@ interface Rec { kind: string; node: Node; }
 interface Puff3 { node: Node; x: number; y: number; z: number; vx: number; vy: number; life: number; max: number; }
 
 /** 分段跑道视图：ribbon 网格 + 特殊地块装饰（桥墩/洞拱/崖栏/过渡牌） */
-interface SegView { node: Node; mesh: Mesh | null; decors: Node[]; }
+interface SegView { node: Node; mesh: Mesh | null; meshes: Mesh[]; decors: Node[]; }
 
 export class Renderer3D implements IRenderer {
     private cfg: GameConfig;
+    private q = QUALITY_PRESETS.mid;
     private root3d!: Node;
     private camNode!: Node;
     private cam!: Camera;
     private fx = new ScreenFx();
     private world = new WorldShift();
+    private tmpColor = new Color();
+    private tmpLook = new Vec3();
 
     private mBox!: Mesh; private mSphere!: Mesh; private mCone!: Mesh;
     private mCyl!: Mesh; private mQuad!: Mesh;
@@ -97,6 +101,7 @@ export class Renderer3D implements IRenderer {
 
     constructor(cfg: GameConfig, catalog: ObstacleCatalog) {
         this.cfg = cfg;
+        this.q = QUALITY_PRESETS[cfg.quality?.level ?? 'mid'] ?? QUALITY_PRESETS.mid;
         this.catalog = catalog;
         for (const d of catalog.obstacles) this.defMap.set(d.id, d);
         this.buildScene();
@@ -137,9 +142,9 @@ export class Renderer3D implements IRenderer {
     // ---------- 场景构建 ----------
     private buildScene() {
         this.mBox = utils.MeshUtils.createMesh(primitives.box());
-        this.mSphere = utils.MeshUtils.createMesh(primitives.sphere(0.5, { segments: 12 }));
-        this.mCone = utils.MeshUtils.createMesh(primitives.cone(0.5, 1, { radialSegments: 10 }));
-        this.mCyl = utils.MeshUtils.createMesh(primitives.cylinder(0.5, 0.5, 1, { radialSegments: 8 }));
+        this.mSphere = utils.MeshUtils.createMesh(primitives.sphere(0.5, { segments: this.q.sphereSeg }));
+        this.mCone = utils.MeshUtils.createMesh(primitives.cone(0.5, 1, { radialSegments: this.q.coneSeg }));
+        this.mCyl = utils.MeshUtils.createMesh(primitives.cylinder(0.5, 0.5, 1, { radialSegments: this.q.cylSeg }));
         this.mQuad = utils.MeshUtils.createMesh(primitives.quad());
 
         const scene = director.getScene()!;
@@ -186,7 +191,7 @@ export class Renderer3D implements IRenderer {
             b.setScale(600, H, 1);
             this.skyBands.push({ node: b, t: i / (bands - 1) });
         }
-        for (let i = 0; i < 30; i++) {
+        for (let i = 0; i < this.q.stars; i++) {
             const st = this.node3d(anchor, `star${i}`, this.mSphere, [255, 255, 255]);
             st.setPosition(((i * 137) % 240) - 120, 24 + ((i * 53) % 66), -170);
             const r = 0.25 + (i % 3) * 0.1;
@@ -241,7 +246,11 @@ export class Renderer3D implements IRenderer {
     private releaseSegView(view: SegView) {
         for (const d of view.decors) this.releaseDecor(d.name, d);
         view.decors.length = 0;
-        if (view.mesh) { view.mesh.destroy(); view.mesh = null; }
+        // 回收时销毁全部动态 Mesh（ribbon + 两条路缘），否则每次复用都叠加旧绘制节点
+        for (const m of view.meshes) m.destroy();
+        view.meshes.length = 0;
+        view.mesh = null;
+        for (const child of [...view.node.children]) child.destroy();
         view.node.setParent(null);
         this.segNodePool.push(view.node);
     }
@@ -299,13 +308,14 @@ export class Renderer3D implements IRenderer {
     private createSegView(seg: TrackSegment): SegView {
         const path = this.core!.path;
         const node = this.acquireSegNode();
-        const view: SegView = { node, mesh: null, decors: [] };
+        const view: SegView = { node, mesh: null, meshes: [], decors: [] };
         // ribbon（主题配色）
         const ribbon = new Node('ribbon');
         ribbon.layer = Layers.Enum.DEFAULT;
         ribbon.setParent(node);
         const mr = ribbon.addComponent(MeshRenderer);
         view.mesh = this.buildRibbonMesh(seg);
+        view.meshes.push(view.mesh);
         mr.mesh = view.mesh;
         const theme = seg.theme % this.cfg.themes.length;
         const tt = this.cfg.themes[theme].trackTint;
@@ -319,13 +329,17 @@ export class Renderer3D implements IRenderer {
             curb.layer = Layers.Enum.DEFAULT;
             curb.setParent(node);
             const cmr = curb.addComponent(MeshRenderer);
-            cmr.mesh = this.buildEdgeRibbon(seg, side * (seg.halfWidth + 0.12), 0.16);
+            const curbMesh = this.buildEdgeRibbon(seg, side * (seg.halfWidth + 0.12), 0.16);
+            view.meshes.push(curbMesh);
+            cmr.mesh = curbMesh;
             cmr.material = this.mat(`curb${theme}`, this.cfg.themes[theme].curbTint);
         }
 
         // 特殊地块装饰（位置相对入口）
         const addDecor = (kind: string, rgb: [number, number, number], dAbs: number, lane: number,
             place: (n: Node, p: PathSample, dy: number) => void) => {
+            // 低画质按确定性哈希抽稀装饰（纯视觉，不影响碰撞/可达性，且同种子画面稳定）
+            if (((Math.floor(dAbs * 7 + Math.abs(lane) * 13) % 100) / 100) >= this.q.decorKeep) return;
             const dn = this.acquireDecor(kind, rgb);
             dn.setParent(node);
             const p = path.sample(dAbs, lane);
@@ -631,8 +645,11 @@ export class Renderer3D implements IRenderer {
 
     destroy() {
         for (const [, view] of this.segViews) {
-            if (view.mesh) view.mesh.destroy();
+            for (const m of view.meshes) m.destroy();
+            view.meshes.length = 0;
+            view.mesh = null;
         }
+        for (const mesh of [this.mBox, this.mSphere, this.mCone, this.mCyl, this.mQuad]) mesh?.destroy();
         this.kuafu.destroy();
         this.root3d?.destroy();
         this.matCache.clear();
@@ -709,7 +726,7 @@ export class Renderer3D implements IRenderer {
 
     // ---------- 尘土 ----------
     private dust() {
-        for (let i = 0; i < 6; i++) {
+        for (let i = 0; i < this.q.dust; i++) {
             const node = this.puffPool.pop() ?? this.node3d(this.root3d, 'puff', this.mSphere, [138, 106, 72]);
             const rr = 0.06 + Math.random() * 0.08;
             node.setScale(rr, rr, rr);
@@ -723,7 +740,7 @@ export class Renderer3D implements IRenderer {
         }
     }
     private burst() {
-        for (let i = 0; i < 14; i++) {
+        for (let i = 0; i < this.q.burst; i++) {
             const node = this.puffPool.pop() ?? this.node3d(this.root3d, 'puff', this.mSphere, [138, 106, 72]);
             const rr = 0.08 + Math.random() * 0.12;
             node.setScale(rr, rr, rr);
@@ -770,7 +787,8 @@ export class Renderer3D implements IRenderer {
         };
         for (const b of this.skyBands) {
             const c = seg(b.t);
-            b.node.getComponent(MeshRenderer)!.material!.setProperty('mainColor', new Color(c[0], c[1], c[2], 255));
+            this.tmpColor.set(c[0], c[1], c[2], 255);
+            b.node.getComponent(MeshRenderer)!.material!.setProperty('mainColor', this.tmpColor);
         }
         const twinkle = (phase: number) => 0.55 + 0.45 * Math.sin(core.gTime * 2 + phase);
         for (const s of this.stars) {
@@ -783,8 +801,9 @@ export class Renderer3D implements IRenderer {
         this.sunNodes[0].setScale(sunScale * (1 + 0.7 * sp), sunScale * (1 + 0.7 * sp), sunScale * (1 + 0.7 * sp));
         this.sunNodes[1].setScale(sunScale * 1.3 * (1 + 0.7 * sp), sunScale * 1.3 * (1 + 0.7 * sp), sunScale * 1.3 * (1 + 0.7 * sp));
         this.sunNodes[1].setPosition(0, 10 - 5.5 * sp, -160.5 + 6 * sp);
-        this.cam.clearColor = new Color(
-            Math.round(seg(1)[0]), Math.round(seg(1)[1]), Math.round(seg(1)[2]), 255);
+        const cc = seg(1);
+        this.tmpColor.set(Math.round(cc[0]), Math.round(cc[1]), Math.round(cc[2]), 255);
+        this.cam.clearColor = this.tmpColor;
     }
 
     /** 车道虚线：固定在路径网格上的真实路面标记（随转弯弯曲），玩家身后裁剪 */
@@ -826,6 +845,7 @@ export class Renderer3D implements IRenderer {
         this.cam.fov += (targetFov - this.cam.fov) * Math.min(1, this.dt * 3);
         const lookP = core.path.sample(core.dist + 3, core.playerLaneF * LANE_W3 * 0.6);
         const rl = this.world.toRender(lookP);
-        this.camNode.lookAt(new Vec3(rl.x, rl.y + LOOK_Y, rl.z));
+        this.tmpLook.set(rl.x, rl.y + LOOK_Y, rl.z);
+        this.camNode.lookAt(this.tmpLook);
     }
 }

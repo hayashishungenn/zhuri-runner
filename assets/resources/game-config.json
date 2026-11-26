@@ -1,5 +1,6 @@
 {
   "renderMode": "3d",
+  "quality": { "level": "mid" },
   "world": {
     "laneCount": 3,
     "laneWidth": 110,

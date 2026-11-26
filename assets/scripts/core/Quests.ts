@@ -81,7 +81,13 @@ export class DailyQuests {
     private lastSeenDate: string;
 
     constructor(state: DailyQuestState, today: string) {
-        this.state = { ...state, picks: [...(state.picks ?? [])], claimed: [...(state.claimed ?? [])] };
+        // 深拷贝：rolloverIfNeeded 会替换 progress/picks/claimed，不能继续引用存档对象
+        this.state = {
+            ...state,
+            picks: [...(state.picks ?? [])],
+            claimed: [...(state.claimed ?? [])],
+            progress: { ...(state.progress ?? {}) },
+        };
         this.lastSeenDate = normalizeDate(today);
         this.rolloverIfNeeded(today);
     }
@@ -103,6 +109,12 @@ export class DailyQuests {
     /** 跨局累计进度（由存档 stats 增量驱动） */
     addProgress(metric: QuestMetric, amount: number): void {
         this.state.progress[metric] = (this.state.progress[metric] ?? 0) + amount;
+    }
+
+    /** 新局开始：清空单局峰值指标（否则跨局累积，任务被错误提前完成） */
+    resetRunMetrics(): void {
+        delete this.state.progress.runLi;
+        delete this.state.progress.runFrags;
     }
 
     /** 单局快照类任务：单局峰值覆盖 */

@@ -7,6 +7,8 @@ export type CapabilityResult<T> = {
     supported: boolean;
     value?: T;
     reason?: string;
+    /** 注册型能力（生命周期）必须提供注销入口，防止场景重建后回调泄漏 */
+    dispose?: () => void;
 };
 
 export interface ScreenInfo {

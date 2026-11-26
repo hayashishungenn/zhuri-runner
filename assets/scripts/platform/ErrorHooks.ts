@@ -13,7 +13,11 @@ interface WxErrorApi {
 }
 declare const wx: WxErrorApi | undefined;
 
+let installed = false;
+
 export function installGlobalErrorHooks(): void {
+    if (installed) return;              // 场景重建不重复注册监听
+    installed = true;
     if (typeof wx !== 'undefined') {
         wx.onError((err: string) => log.error('wx.onError:', err));
         wx.onUnhandledRejection((res: { reason: unknown }) => log.error('unhandledRejection:', String(res?.reason)));

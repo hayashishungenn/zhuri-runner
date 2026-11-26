@@ -60,7 +60,13 @@ export class WxPlatform implements IPlatform {
         const api = wx!;
         api.onHide(handlers.onHide);
         api.onShow(handlers.onShow);
-        return { supported: true };
+        return {
+            supported: true,
+            dispose: () => {
+                api.offHide?.(handlers.onHide);
+                api.offShow?.(handlers.onShow);
+            },
+        };
     }
 
     screen(): ScreenInfo {
@@ -110,7 +116,9 @@ export class WxPlatform implements IPlatform {
                     onClose(res?.isEnded === true);
                 };
                 ad.onClose(cb);
-                return ad.show().catch(() => ad.load().then(() => ad.show()));
+                // 不在适配器内部重试：show 失败必须冒泡给 AdService 显式结算，
+                // 否则"后台偷偷重播"会在事务已判失败后触发迟到的 isEnded 回调
+                return ad.show().catch((e) => { ad.offClose(cb); throw e; });
             },
         };
     }

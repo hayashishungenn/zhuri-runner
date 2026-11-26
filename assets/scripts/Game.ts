@@ -3,7 +3,7 @@
  * 职责仅装配：加载配置 → 构建 核心/输入/渲染/广告 → 每帧驱动与事件路由。
  * 玩法规则全部在 core/GameCore；画面在 render/*；平台在 platform/*。
  */
-import { _decorator, Component, Color, error, game, Game as CCGame, sys } from 'cc';
+import { _decorator, Component, Color, error, game, Game as CCGame } from 'cc';
 import { loadGameConfig, loadObstacleCatalog, loadSkins, loadTileTemplates } from './config/GameConfig';
 import { SkinCatalog } from './config/SkinCatalog';
 import { formatUi, GameConfig } from './config/GameConfigSchema';
@@ -24,6 +24,7 @@ import { AudioMgr, SfxName } from './audio/AudioMgr';
 import { LOGICAL_W, PLAYER_Y } from './render/layout';
 import { Economy } from './core/Economy';
 import { PlayerStats } from './core/PlayerStats';
+import { RunLedger } from './core/RunLedger';
 import { DailyQuests, QUEST_TEMPLATES } from './core/Quests';
 import { Achievements, ACHIEVEMENTS } from './core/Achievements';
 import { Upgrades, UpgradeKind, UPGRADE_DEFS, totalLevels } from './core/Upgrades';
@@ -33,10 +34,6 @@ const { ccclass } = _decorator;
 const log = new Logger('Game');
 
 /** 原子消费辅助：Economy.spend 透传 */
-function econSpend(econ: Economy, amount: number): boolean {
-    return econ.spend(amount);
-}
-
 @ccclass('Game')
 export class Game extends Component {
     private cfg: GameConfig | null = null;
@@ -59,12 +56,11 @@ export class Game extends Component {
     upgrades = new Upgrades({});
     tutorial = new Tutorial(false);
     page: string | null = null;
-    private runGold = 0;
-    private lastFragsForGold = 0;
+    private ledger = new RunLedger();
     private lastThemeIdx = 0;
-    private runSeed = 0;
     private sync = { totalLi: 0, totalFrags: 0, itemUses: {} as Record<string, number> };
-    private tutorialPendingDone = false;
+    private tutorialRun = false;
+    private lifecycleDispose: (() => void) | null = null;
 
     async start() {
         installGlobalErrorHooks();
@@ -87,12 +83,14 @@ export class Game extends Component {
         this.core = this.core ?? new GameCore(cfg, undefined, { turnsEnabled: cfg.renderMode === '3d', catalog });
         // 无限地图：注入地块模板 id 表（渲染装饰由模板数据驱动）
         this.core.mapGen.tileIds = tiles.templates.map((t) => ({ id: t.id, kind: t.kind, theme: t.theme }));
-        this.save = new Save({
-            get: (k: string) => sys.localStorage.getItem(k),
-            set: (k: string, v: string) => { sys.localStorage.setItem(k, v); },
-        });
+        // 平台服务与生命周期（存档必须走平台抽象：微信 API / 浏览器内存兜底）
+        this.platform = createPlatform();
+        const lc = this.platform.lifecycle({ onHide: () => this.onGameHide(), onShow: () => this.onGameShow() });
+        if (!lc.supported) log.warn('平台生命周期不支持: ' + (lc.reason ?? '未知'));
+        this.lifecycleDispose = lc.dispose ?? null;
+        this.save = new Save(this.platform.storage);
         // Phase 6：存档装载到各成长系统（迁移/损坏处理已由 Save 完成）
-        this.economy = new Economy(this.save.data.gold);
+        this.economy = new Economy(this.save.data.gold, this.save.data.txLog);
         this.stats = new PlayerStats(this.save.data.stats);
         this.quests = new DailyQuests(this.save.data.quests, this.today());
         this.upgrades = new Upgrades(this.save.data.upgrades);
@@ -105,10 +103,7 @@ export class Game extends Component {
         void this.audio.load();
         log.info('配置加载成功 renderMode=' + cfg.renderMode + ' 障碍种类=' + catalog.obstacles.length);
         this.cfg = cfg;
-        // 平台服务 + 广告（正式隔离：微信端只走平台适配器，mock 模式在微信端不发奖）
-        this.platform = createPlatform();
-        const lc = this.platform.lifecycle({ onHide: () => this.onGameHide(), onShow: () => this.onGameShow() });
-        if (!lc.supported) log.warn('平台生命周期不支持: ' + (lc.reason ?? '未知'));
+        // 广告（正式隔离：微信端只走平台适配器，mock 模式在微信端不发奖）
         const mockRewarded = this.platform.isWechat ? undefined : new MockRewardedAdapter();
         const mockInterstitial = this.platform.isWechat ? undefined : new MockInterstitialAdapter();
         this.ad = new AdService(this.platform, {
@@ -122,7 +117,11 @@ export class Game extends Component {
         if (cfg.renderMode === '2d') this.renderer = new Renderer2D(this.node, cfg, catalog);
         this.hud = new Hud2D(this.node, cfg);
         if (this.save) this.hud.setBestLi(this.save.data.bestLi);
-        if (cfg.renderMode === '3d') this.renderer = new Renderer3D(cfg, catalog);
+        if (cfg.renderMode === '3d') {
+            const r3d = new Renderer3D(cfg, catalog);
+            r3d.setTileTemplates(tiles.templates);   // 42 模板驱动渲染装饰（此前从未接线）
+            this.renderer = r3d;
+        }
         this.inputCtl = new InputController(this.makeDelegate(), cfg.input);
         this.inputCtl.attach();
         this.hud.setHandlers({
@@ -143,10 +142,14 @@ export class Game extends Component {
     onDestroy() {
         this.inputCtl?.detach();
         this.renderer?.destroy();
+        this.audio?.destroy();
+        this.ad?.dispose();
+        this.lifecycleDispose?.();
         game.off(CCGame.EVENT_HIDE, this.onGameHide, this);
     }
 
     private onGameHide() {
+        this.ad?.onHide();
         if (this.core && this.core.state === 'run' && !this.core.paused) {
             this.core.pause();
             log.info('切后台自动暂停');
@@ -160,6 +163,13 @@ export class Game extends Component {
         // Phase 6：成长系统喂数（统计/任务进度/教程推进）
         this.stats.onEvents(events);
         this.tutorial.onEvents(events);
+        this.tutorial.update(this.core);
+        if (this.tutorialRun && this.tutorial.done) {
+            if (this.save && !this.save.data.tutorial.done) this.save.data.tutorial.done = true;
+            this.tutorialRun = false;
+            this.ledger.endTutorial(this.core.cfg.spawn, this.core.cfg.map);
+            this.persist();
+        }
         const themeIdx = this.core.themeIdx;
         if (themeIdx !== this.lastThemeIdx) {
             if (themeIdx > this.lastThemeIdx) this.stats.visitTheme(themeIdx);
@@ -179,23 +189,22 @@ export class Game extends Component {
         }
         this.quests.setRunMetric('runLi', Math.round(this.core.li));
         this.quests.setRunMetric('runFrags', this.core.frags);
-        // 金币结算：碎片按倍率实时换金币（事务 id 唯一防重）
-        if (this.core.frags !== this.lastFragsForGold) {
-            const delta = this.core.frags - this.lastFragsForGold;
-            this.lastFragsForGold = this.core.frags;
-            this.economy.grant(`frag:${this.runSeed}:${this.lastFragsForGold}`, Math.round(delta * this.upgrades.goldMul()));
-        }
-        // 结算存档：无尽最佳（死亡/通关瞬间）+ 征途通关标记 + 单局结算
-        if (this.save) {
-            for (const e of events) {
-                if (e.type === 'died' && this.core.mode === 'endless') {
-                    const li = Math.floor(this.core.li);
-                    if (li > this.save.data.bestLi) {
-                        this.save.data.bestLi = li;
-                        this.hud?.setBestLi(li);
-                    }
+        // 金币：实时增量发放，事务 id 由 RunLedger 保证跨局唯一
+        const grant = this.ledger.fragmentGrant(this.core.frags, this.upgrades.goldMul());
+        if (grant && grant.amount > 0) this.economy.grant(grant.txId, grant.amount);
+        // 结算：死亡/通关瞬间（每局一次）+ 最佳纪录 + 征途标记
+        for (const e of events) {
+            if (e.type === 'died' && this.core.mode === 'endless') {
+                const li = Math.floor(this.core.li);
+                if (this.save && li > this.save.data.bestLi) {
+                    this.save.data.bestLi = li;
+                    this.hud?.setBestLi(li);
                 }
-                if (e.type === 'journeyDone') this.save.data.journeyDone = true;
+                this.settleRun();
+            }
+            if (e.type === 'journeyDone') {
+                if (this.save) this.save.data.journeyDone = true;
+                this.settleRun();
             }
         }
         this.routeEvents(events);
@@ -222,7 +231,8 @@ export class Game extends Component {
             case 'died': this.audio?.playSfx('death'); break;
             case 'fragment': this.audio?.playSfx('coin', 0.6); break;
             case 'land': this.audio?.playSfx('land', 0.7); break;
-            case 'jump': break;   // 起跳音由手势侧触发（jump 音效在 doJump 事件）
+            case 'jump': this.audio?.playSfx('jump', 0.8); break;
+            case 'slideStart': this.audio?.playSfx('slide', 0.8); break;
             case 'turnOk': this.audio?.playSfx('turn'); break;
             case 'shieldBreak': this.audio?.playSfx('shield'); break;
             case 'stumble': this.audio?.playSfx('hit', 0.8); break;
@@ -286,27 +296,37 @@ export class Game extends Component {
     private cycleSkin() {
         if (!this.skins || !this.save) return;
         this.skinIdx = (this.skinIdx + 1) % this.skins.skins.length;
-        sys.localStorage.setItem('zhuri.skin', String(this.skinIdx));
+        this.save.data.skin = this.skins.skins[this.skinIdx].id;
+        this.persist();
         this.applySkin();
         this.hud?.setSkinIdx(this.skinIdx, this.skins.skins.map((x) => x.label));
         this.audio?.playSfx('ui');
     }
 
-    /** 单局结算：金币事务、统计落账、插屏（仅自然结束节点）、存档 flush */
+    /** 单局结算：统计落账、插屏（仅自然结束节点）、存档落盘。金币已在拾取时逐笔发放，此处不重复 grant。 */
     private settleRun() {
         const core = this.core!;
+        if (!this.ledger.claimSettlement(this.ledger.currentSeed)) return;
         const gold = Math.round(core.frags * this.upgrades.goldMul());
-        const tx = `run:${core.mode}:${Date.now()}:${Math.floor(core.dist * 100)}`;
-        this.economy.grant(tx, gold);
         this.stats.onRunSettle(core.li, core.frags, gold, core.state, core.themeIdx, core.themeIdx);
-        this.ad?.stats.record('run_start', core.mode);
         this.ad?.stats.record('run_end', core.mode);
+        this.ad?.noteRunEnd();
         // 插屏：仅在自然结算节点尝试（内部总开关/首局保护/冷却/频控）绝不打断奔跑
         this.ad?.maybeShowInterstitial();
-        if (this.save) {
-            this.save.data.ads = this.ad!.stats.data;
-            this.save.flush();
-        }
+        this.persist();
+    }
+
+    /** 所有持久状态的统一写盘入口：金币/事务日志/任务/成长/广告统计必须与存档同源 */
+    private persist(): void {
+        if (!this.save) return;
+        this.save.data.gold = this.economy.gold;
+        this.save.data.txLog = this.economy.exportTxLog();
+        this.save.data.quests = { ...this.quests.state };
+        this.save.data.stats = this.stats.stats;
+        this.save.data.upgrades = { ...this.upgrades.levels };
+        if (this.ad) this.save.data.ads = this.ad.stats.data;
+        try { this.save.flush(); }
+        catch (e) { log.warn('存档写入失败（游戏继续运行）', String(e)); }
     }
 
     /**
@@ -315,6 +335,7 @@ export class Game extends Component {
      */
     private requestAd(scene: AdScene): void {
         if (!this.ad || !this.save || !this.core) return;
+        if (scene === 'revive' && (!this.core.reviveUsable() || this.core.state !== 'dead')) return;
         const check = this.ad.canUse(scene);
         if (!check.ok) {
             // 明确不可用（未开通流量主/未配置广告位）——不伪造成功，不阻断游戏
@@ -325,7 +346,7 @@ export class Game extends Component {
             // ★ 回调只在此处发放一次（AdService 事务已防重放）
             switch (scene) {
             case 'revive':
-                    this.core!.revive();
+                if (!this.core!.revive()) break;   // 异步回调到达时状态可能已变
                     this.ad!.stats.record('revive', scene);
                 this.audio?.playSfx('revive');
                 break;
@@ -339,9 +360,8 @@ export class Game extends Component {
                 // 今日最优任务的奖励翻倍（事务幂等）
                 const tpl = this.quests.todays().find((t) => this.quests.isComplete(t) && !this.quests.isClaimed(t));
                 if (tpl && this.quests.claim(tpl, this.save!.data.quests.claimed)) {
-                        this.save!.data.quests.claimed.push(tpl.id);
-                        this.economy.grant(`addaily:${this.quests.state.date}:${tpl.id}`, tpl.reward * 2);
-                        this.refreshPage();
+                    this.economy.grant(`addaily:${this.quests.state.date}:${tpl.id}`, tpl.reward * 2);
+                    this.refreshPage();
                 }
                 break;
             }
@@ -361,27 +381,23 @@ export class Game extends Component {
                 break;
             }
             }
-            this.save!.data.ads = this.ad!.stats.data;
-            this.save!.flush();
+            this.persist();
         });
     }
 
     /** 回到前台：平台音频恢复（不影响暂停状态，由玩家手动继续） */
     private onGameShow() {
+        this.ad?.onShow();
         const res = this.platform.resumeAudio();
         if (!res.supported) log.warn('音频恢复不可用: ' + (res.reason ?? ''));
     }
 
-    /** 新手教程启动：稀疏生成 + 顺序引导（可跳过） */
+    /** 新手教程启动：稀疏生成 + 顺序引导（可跳过；参数由 RunLedger 备份并在结束后还原） */
     private startTutorial() {
         if (!this.core || !this.save) return;
-        this.tutorialPendingDone = false;
+        this.tutorialRun = true;
         this.tutorial = new Tutorial(true, 0);
-        this.startMode('endless');
-        // 教程局：稀疏生成 + 快速路口，让玩家专注动作
-        this.core.cfg.spawn.rowInterval = 16;
-        this.core.cfg.map.turnGapMin = 30;
-        this.core.cfg.map.turnGapMax = 60;
+        this.startMode('endless', true);
         this.hud?.showTutorialHint(this.tutorial.step?.text ?? '', !this.save.data.tutorial.done);
     }
 
@@ -392,10 +408,35 @@ export class Game extends Component {
     }
 
     /** 按模式启动；记录模式（core.mode 影响征途判定与太阳进度） */
-    private startMode(mode: 'endless' | 'journey') {
+    private startMode(mode: 'endless' | 'journey', tutorial = false) {
         const core = this.core!;
+        this.closePage();
+        if (this.tutorialRun && !tutorial) {
+            this.tutorialRun = false;
+            this.ledger.endTutorial(core.cfg.spawn, core.cfg.map);
+        }
+        this.ledger.beginRun(core.cfg.spawn, core.cfg.map, tutorial);
+        this.applyMods();
+        this.stats.onRunStart();
+        this.quests.resetRunMetrics();
+        this.sync = { totalLi: 0, totalFrags: 0, itemUses: {} };
+        this.lastStep = -1;
+        this.ad?.stats.record('run_start', mode);
+        this.persist();
         core.mode = mode;
         core.startRun();
+    }
+
+    /** 强化效果注入核心（五系全部生效，公平性：不含速度） */
+    private applyMods(): void {
+        const core = this.core!;
+        core.mods = {
+            staffCapBonus: this.upgrades.staffCapBonus(),
+            waterReduceBonus: this.upgrades.waterReduceBonus(),
+            magnetBonus: this.upgrades.magnetDurationBonus(),
+            heatResist: this.upgrades.heatResist(),
+            goldMul: this.upgrades.goldMul(),
+        };
     }
 
     private makeDelegate(): InputDelegate {
@@ -417,7 +458,7 @@ export class Game extends Component {
                 else if (this.core.state === 'run') this.core.doJump();
             },
             onTapStart: (gx: number, gy: number) => {
-                if (!this.core || !this.hud) return;
+                if (!this.core || !this.hud || this.ad?.state === 'showing') return;
                 if (gx > 408 && gx < 446 && gy > 20 && gy < 62) { const m = this.hud.toggleMute(); this.audio?.setMuted(m); return; }
                 if (this.hud.hitTutorialSkip(gx, gy)) { this.tutorial.skip(); this.hud.hideTutorialHint(); return; }
                 if (this.core.state === 'title' && this.hud.hitSkinButton(gx, gy)) this.cycleSkin();
@@ -448,17 +489,21 @@ export class Game extends Component {
         };
     }
 
-    /** 页面交互：领取/购买/使用/升级/设置（幂等由 Economy/quests.claimed 保证） */
+    /** 页面交互：领取/购买/使用/升级/设置/广告奖励（幂等由 Economy/quests.claimed 保证） */
     private onPageAction(action: string): void {
         if (action === '__back__') { this.closePage(); return; }
+        if (action.startsWith('ad:')) {
+            this.requestAd(action.slice(3) as AdScene);
+            return;
+        }
         // 任务领取
         if (action.startsWith('claimq:')) {
             const id = action.slice(7);
             const tpl = QUEST_TEMPLATES.find((t) => t.id === id);
             if (!tpl || !this.quests.isComplete(tpl) || this.quests.isClaimed(tpl)) return;
             if (this.quests.claim(tpl, this.save?.data.quests.claimed ?? [])) {
-                this.save?.data.quests.claimed.push(tpl.id);
                 this.economy.grant(`q:${this.quests.state.date}:${tpl.id}`, tpl.reward);
+                this.persist();
                 this.refreshPage();
                 this.audio?.playSfx('coin');
             }
@@ -472,8 +517,8 @@ export class Game extends Component {
             const extra = { skins: this.save.data.skinsOwned.length, upgradeLevels: totalLevels(this.upgrades.levels) };
             if (!this.ach.isUnlocked(def, this.save.data.stats, extra) || this.ach.isClaimed(def, this.save.data.achClaimed)) return;
             if (this.ach.claim(def, this.save.data.achClaimed)) {
-                this.save.data.achClaimed.push(def.id);
                 this.economy.grant(`a:${def.id}`, def.reward);
+                this.persist();
                 this.refreshPage();
                 this.audio?.playSfx('coin');
             }
@@ -487,12 +532,12 @@ export class Game extends Component {
             if (!skin) return;
             if (action.startsWith('buy:')) {
                 const costs: Record<string, number> = { xuanjia: 600, chiyan: 800, cangteng: 800, jinwu: 1200, weishui: 1000, huangmo: 1000, fusang: 2000 };
-                if (this.save.data.skinsOwned.includes(id) || !econSpend(this.economy, costs[id] ?? 9999)) return;
+                if (this.save.data.skinsOwned.includes(id) || !this.economy.spend(costs[id] ?? 9999)) return;
                 this.save.data.skinsOwned.push(id);
             }
             this.save.data.skin = id;
             this.skinIdx = Math.max(0, this.skins.skins.findIndex((x) => x.id === id));
-            this.save.flush();
+            this.persist();
             this.applySkin();
             this.hud?.setSkinIdx(this.skinIdx, this.skins.skins.map((x) => x.label));
             this.refreshPage();
@@ -503,21 +548,35 @@ export class Game extends Component {
         if (action.startsWith('up:')) {
             const kind = action.slice(3) as UpgradeKind;
             const cost = this.upgrades.cost(kind);
-            if (cost === null || !econSpend(this.economy, cost)) return;
+            if (cost === null || !this.economy.spend(cost)) return;
             this.upgrades.apply(kind);
-            if (this.save) this.save.data.upgrades = { ...this.upgrades.levels };
-            this.save?.flush();
+            this.applyMods();
+            this.persist();
             this.refreshPage();
             this.audio?.playSfx('ui');
             return;
         }
         // 设置
         if (action === 'restore') {
-            if (this.save?.restoreBackup()) { this.refreshPage(); this.audio?.playSfx('ui'); }
+            if (this.save?.restoreBackup()) {
+                // 备份是整份存档：所有派生系统必须重新装载，否则内存态仍指向旧档
+                const d = this.save.data;
+                this.economy = new Economy(d.gold, d.txLog);
+                this.stats = new PlayerStats(d.stats);
+                this.quests = new DailyQuests(d.quests, this.today());
+                this.upgrades = new Upgrades(d.upgrades);
+                this.applyMods();
+                this.ad?.loadStats(d.ads);
+                this.skinIdx = Math.max(0, d.skinsOwned.indexOf(d.skin));
+                this.applySkin();
+                this.hud?.setSkinIdx(this.skinIdx, this.skins?.skins.map((x) => x.label) ?? []);
+                this.refreshPage();
+                this.audio?.playSfx('ui');
+            }
             return;
         }
         if (action === 'retutorial') {
-            if (this.save) { this.save.data.tutorial.done = false; this.save.flush(); }
+            if (this.save) { this.save.data.tutorial.done = false; this.persist(); }
             this.closePage();
             this.audio?.playSfx('ui');
         }
@@ -587,6 +646,16 @@ export class Game extends Component {
                 { label: `累计金币 ${st.goldEarned}` },
                 { label: `征途 ${d.journeyDone ? '已完成' : '未完成'}` },
             ]);
+        } else if (this.page === 'adrewards') {
+            const available = (s: AdScene) => this.ad?.canUse(s).ok ? '【观看】' : '（暂不可用）';
+            this.hud?.openPage('adrewards', '广告奖励', [
+                { label: goldLbl },
+                { label: `金币翻倍 ${available('doubleCoins')}`, action: 'ad:doubleCoins' },
+                { label: `每日任务翻倍 ${available('dailyDouble')}`, action: 'ad:dailyDouble' },
+                { label: `限时神通 ${available('timedPower')}`, action: 'ad:timedPower' },
+                { label: `皮肤试用 ${available('skinTrial')}`, action: 'ad:skinTrial' },
+                { label: '复活奖励在死亡面板领取' },
+            ]);
         } else if (this.page === 'settings') {
             this.hud?.openPage('settings', '设置', [
                 { label: this.hud?.isMutedVisual ? '声音 已静音' : '声音 开启' },
@@ -617,6 +686,9 @@ export class Game extends Component {
             break;
         case 'revive':
             this.requestAd('revive');
+            break;
+        case 'doubleCoins':
+            this.requestAd('doubleCoins');
             break;
         case 'cycleSkin':
             if (core.state === 'title') this.cycleSkin();

@@ -8,7 +8,7 @@
  * - 插屏仅在自然结算节点展示，带总开关/首局保护/冷却/频次上限
  */
 import { IPlatform, IRewardedAdapter, IInterstitialAdapter } from './IPlatform';
-import { AdStats, AdStatsData, defaultAdStats } from '../core/AdStats';
+import { AdStats, AdStatsData, localDate, mergeAdStats } from '../core/AdStats';
 
 export type AdScene = 'revive' | 'doubleCoins' | 'dailyDouble' | 'timedPower' | 'skinTrial';
 export type AdFailReason =
@@ -39,19 +39,45 @@ export class AdService {
     readonly stats: AdStats;
     state: AdState = 'idle';
     lastFailReason: AdFailReason | null = null;
-    /** 事务防重放：已完成事务 id */
-    private settled = new Set<string>();
     private inFlight: string | null = null;
     private timer: ReturnType<typeof setTimeout> | null = null;
-    /** 插屏频控（本地内存；存档可注入恢复） */
-    interstitialShownToday = 0;
-    lastInterstitialAt = 0;
-    completedRuns = 0;
+    /** 切后台时冻结超时：避免玩家完整观看却因后台延迟被判 timeout */
+    private pausedAt: number | null = null;
+    private remainingMs = 0;
+    private timerStartedAt = 0;
+    private finishPending: ((rewarded: boolean, reason?: AdFailReason) => void) | null = null;
+    /** 适配器缓存：避免每次 canUse 重复创建微信广告实例 */
+    private adapters = new Map<string, IRewardedAdapter>();
 
     constructor(private platform: IPlatform, private cfg: AdServiceCfg, statsData?: AdStatsData,
         /** 仅浏览器测试环境可注入模拟适配器；正式包不注入 */
         private mockRewarded?: IRewardedAdapter, private mockInterstitial?: IInterstitialAdapter) {
-        this.stats = new AdStats(statsData ?? defaultAdStats());
+        this.stats = new AdStats(mergeAdStats(statsData));
+        this.applyInterstitialState();
+    }
+
+    /** 插屏频控状态（持久化于存档 ads 段；跨会话仍受首局保护/每日上限约束） */
+    get interstitialShownToday(): number { return this.stats.data.interstitial.shownToday; }
+    set interstitialShownToday(v: number) { this.stats.data.interstitial.shownToday = v; }
+    get lastInterstitialAt(): number { return this.stats.data.interstitial.lastAt; }
+    set lastInterstitialAt(v: number) { this.stats.data.interstitial.lastAt = v; }
+    get completedRuns(): number { return this.stats.data.interstitial.completedRuns; }
+    set completedRuns(v: number) { this.stats.data.interstitial.completedRuns = v; }
+
+    /** 换档/恢复备份：重新装载统计与频控状态 */
+    loadStats(data?: AdStatsData | null): void {
+        this.stats.data = mergeAdStats(data);
+        this.applyInterstitialState();
+    }
+
+    private applyInterstitialState(): void {
+        const st = this.stats.data.interstitial;
+        const today = localDate();
+        if (st.date !== today) {
+            st.date = today;
+            st.shownToday = 0;
+            st.lastAt = 0;
+        }
     }
 
     /** 广告是否可用（明确状态，不伪造） */
@@ -62,7 +88,11 @@ export class AdService {
         }
         const id = this.cfg.adUnitIds[scene];
         if (!id) return { ok: false, reason: 'noAdUnit' };
-        if (this.platform.isWechat) return { ok: true };
+        if (this.platform.isWechat) {
+            return this.rewardedAdapter(scene)?.supported
+                ? { ok: true }
+                : { ok: false, reason: 'unsupported' };
+        }
         // 浏览器：仅显式注入模拟适配器时可用（测试模式，奖励不进入正式统计）
         return this.mockRewarded?.supported ? { ok: true } : { ok: false, reason: 'unsupported' };
     }
@@ -100,13 +130,9 @@ export class AdService {
                     }
                     settled = true;
                     this.clearTimer();
+                    this.finishPending = null;
                     this.inFlight = null;
                     if (rewarded) {
-                        if (this.settled.has(txId)) {   // 事务防重放
-                            resolve({ rewarded: false, reason: 'duplicate', txId });
-                            return;
-                        }
-                        this.settled.add(txId);
                         this.state = 'rewarded';
                         this.stats.record('ad_complete', scene);
                         this.stats.record('ad_reward', scene);
@@ -119,7 +145,10 @@ export class AdService {
                     }
                 };
                 // 超时守护（模拟适配器 timeout 分支依赖此机制）
-                this.timer = setTimeout(() => finish(false, 'timeout'), this.cfg.timeoutMs);
+                this.finishPending = finish;
+                this.remainingMs = this.cfg.timeoutMs;
+                this.timerStartedAt = Date.now();
+                this.timer = setTimeout(() => finish(false, 'timeout'), this.remainingMs);
                 adapter.show((isEnded: boolean) => {
                     // 微信官方判据：只有 isEnded=true 才算完整观看
                     finish(isEnded, isEnded ? undefined : 'notEnded');
@@ -143,16 +172,41 @@ export class AdService {
     }
 
     private rewardedAdapter(scene: AdScene): IRewardedAdapter | null {
-        if (this.platform.isWechat) return this.platform.rewardedAd(this.cfg.adUnitIds[scene] ?? '');
-        return this.mockRewarded ?? null;
+        if (!this.platform.isWechat) return this.mockRewarded ?? null;
+        const id = this.cfg.adUnitIds[scene] ?? '';
+        if (!id) return null;
+        let a = this.adapters.get(scene);
+        if (!a) { a = this.platform.rewardedAd(id); this.adapters.set(scene, a); }
+        return a;
     }
 
     private clearTimer(): void {
         if (this.timer !== null) { clearTimeout(this.timer); this.timer = null; }
+        this.pausedAt = null;
+    }
+
+    /** 切后台：冻结广告超时计时（回调可能延迟到回前台后才到达） */
+    onHide(): void {
+        if (this.timer === null || this.pausedAt !== null) return;
+        this.remainingMs = Math.max(0, this.remainingMs - (Date.now() - this.timerStartedAt));
+        clearTimeout(this.timer);
+        this.timer = null;
+        this.pausedAt = Date.now();
+    }
+
+    /** 回前台：按剩余时间恢复超时守护 */
+    onShow(): void {
+        if (this.pausedAt === null || this.state !== 'showing') return;
+        this.pausedAt = null;
+        if (this.remainingMs > 0) {
+            this.timerStartedAt = Date.now();
+            this.timer = setTimeout(() => this.finishPending?.(false, 'timeout'), this.remainingMs);
+        }
     }
 
     /** 插屏：仅自然结算节点调用；所有限制生效时返回 false（不打断游戏） */
     maybeShowInterstitial(): boolean {
+        this.applyInterstitialState();
         const c = this.cfg.interstitial;
         if (!c.enabled) return false;
         if (this.completedRuns < c.firstRunProtection) return false;
@@ -164,14 +218,30 @@ export class AdService {
             ? this.platform.interstitialAd(this.cfg.interstitialUnitId)
             : (this.mockInterstitial ?? null);
         if (!adapter?.supported) return false;
-        adapter.load().then((ok) => { if (ok) { adapter.show().catch(() => { /* 插屏失败不阻断 */ }); } })
-            .catch(() => { /* 加载失败不阻断 */ });
+        // 同步占用配额（防同帧反复触发）；加载/展示失败时退还计数，冷却保留用于防刷
         this.lastInterstitialAt = now;
         this.interstitialShownToday++;
-        this.completedRuns++;
+        const refund = () => {
+            if (this.lastInterstitialAt === now) this.interstitialShownToday = Math.max(0, this.interstitialShownToday - 1);
+        };
+        adapter.load().then((ok) => {
+            if (!ok) { refund(); return; }
+            return adapter.show().catch(() => { refund(); });
+        }).catch(() => { refund(); });
         return true;
     }
 
-    /** 记录一局结束（插屏首局保护计数） */
-    noteRunEnd(): void { this.completedRuns++; }
+    /** 记录一局自然结束（插屏首局保护计数；每局只调用一次，跨会话持久化） */
+    noteRunEnd(): void {
+        this.applyInterstitialState();
+        this.stats.data.interstitial.completedRuns++;
+    }
+
+    /** 场景销毁：取消未决定时器，避免回调写入已销毁实例 */
+    dispose(): void {
+        this.clearTimer();
+        this.finishPending = null;
+        this.inFlight = null;
+        this.adapters.clear();
+    }
 }
