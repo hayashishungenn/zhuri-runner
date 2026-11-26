@@ -58,6 +58,7 @@ export class Hud2D {
     private lblBtnJourney!: Label;
     private lblEndedT!: Label;
     private lblEndedS!: Label;
+    private lblSkin!: Label;
     private lblPaused!: Label;
     private lblResume!: Label;
     private lblRestart2!: Label;
@@ -159,6 +160,14 @@ export class Hud2D {
         es.node.setPosition(0, LY(345), 0);
         this.lblEndedT.node.active = false;
         this.lblEndedS.node.active = false;
+        // 标题：皮肤循环按钮 + 当前皮肤名
+        const sk = this.makeLabel(parent, 'tSkinBtn', 20, C_NOTE());
+        sk.lbl.string = '换肤 ›';
+        sk.node.setPosition(LX(392), LY(430), 0);
+        const skn = this.makeLabel(parent, 'tSkinName', 20, C_PANEL_TXT());
+        this.lblSkin = skn.lbl;
+        skn.node.setPosition(LX(280), LY(430), 0);
+        this.lblSkin.node.active = false;
 
         // 暂停面板
         const pt = this.makeLabel(parent, 'zTitle', 44, lc);
@@ -221,8 +230,20 @@ export class Hud2D {
     toggleMute(): boolean { this.muted = !this.muted; return this.muted; }
 
     private bestLi = 0;
+    private skinIdx = 0;
+    private skinLabels: string[] = [];
     /** 标题显示无尽最佳纪录（Game 装配时注入；起跑刷新） */
     setBestLi(v: number) { this.bestLi = Math.floor(v); }
+    /** 皮肤循环状态（标题按钮显示当前皮肤名） */
+    setSkinIdx(idx: number, labels: string[]) {
+        this.skinIdx = idx % Math.max(labels.length, 1);
+        this.skinLabels = labels;
+        this.lblSkin.string = labels[this.skinIdx] ?? '';
+    }
+    /** 标题换肤按钮命中（逻辑坐标） */
+    hitSkinButton(gx: number, gy: number): boolean {
+        return gx > 360 && gx < 424 && gy > 420 && gy < 442;
+    }
     markFirstInput() { this.firstInput = true; }
 
     // ---------- 弹字 ----------
@@ -280,7 +301,9 @@ export class Hud2D {
         this.lblSpeed.string = formatUi(this.cfg.ui.speedLabel, Math.round(core.effectiveSpeed));
         // 道具状态文本（优先级：冲刺 > 护盾 > 磁吸 > 倍率）
         const parts: string[] = [];
-        if (core.dashT > 0) parts.push(`冲刺 ${core.dashT.toFixed(0)}`);
+        if (core.dashT > 0) parts.push(`御风 ${core.dashT.toFixed(0)}`);
+        if (core.leapT > 0) parts.push(`巨跃 ${core.leapT.toFixed(0)}`);
+        if (core.staffCharges > 0) parts.push(`神杖 ×${core.staffCharges}`);
         if (core.shieldCharges > 0) parts.push('护盾 ●');
         if (core.magnetT > 0) parts.push(`磁吸 ${core.magnetT.toFixed(0)}`);
         if (core.doubleT > 0) parts.push(`×2 ${core.doubleT.toFixed(0)}`);

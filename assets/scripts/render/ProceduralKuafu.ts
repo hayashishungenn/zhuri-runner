@@ -10,6 +10,9 @@
  */
 import { Node, Layers } from 'cc';
 import { CharacterAnimator, AnimInput, CharAnimState } from './CharacterAnimator';
+import { SkinAccessory } from '../config/SkinCatalog';
+
+const HOP_U = 1.42;          // 跳跃高度（与 Renderer3D 尺度一致）
 
 const BODY: [number, number, number] = [26, 17, 10];
 const STAFF: [number, number, number] = [74, 44, 24];
@@ -23,6 +26,9 @@ export class ProceduralKuafu implements CharacterAnimator {
     private legL!: Node; private legR!: Node;
     private armL!: Node; private armR!: Node;
     private staff!: Node;
+    private bodyNodes: Node[] = [];        // 受皮肤着色影响的节点
+    private accessories: Node[] = [];      // 当前皮肤专属配件
+    private makePartFn!: (parent: Node, name: string, kind: 'box' | 'sphere' | 'cyl' | 'cone', rgb: [number, number, number]) => Node;
 
     private state: CharAnimState = 'idle';
     private deadT = 0;          // 倒地插值计时
@@ -30,45 +36,94 @@ export class ProceduralKuafu implements CharacterAnimator {
     private yawDeg = 0;         // 世界航向（转弯后由输入驱动）
 
     constructor(
-        private makeNode: (parent: Node, name: string, kind: 'box' | 'sphere' | 'cyl' | 'cone', rgb: [number, number, number]) => Node,
+        makeNode: (parent: Node, name: string, kind: 'box' | 'sphere' | 'cyl' | 'cone', rgb: [number, number, number]) => Node,
         parent: Node,
+        bodyTint: [number, number, number] = BODY,
+        staffTint: [number, number, number] = [74, 44, 24],
+        accessories: SkinAccessory[] = [],
     ) {
+        this.makePartFn = makeNode;
+        this.build(parent, bodyTint, staffTint, accessories);
+    }
+
+    /** 构建/重建整具角色（换肤 = 销毁重建，低频操作；材质按肤色生成独立实例） */
+    build(parent: Node, bodyTint: [number, number, number], staffTint: [number, number, number],
+        accessories: SkinAccessory[]) {
+        const wasActive = this.root3d ? this.root3d.active : true;
+        if (this.root3d) this.root3d.destroy();
+        for (const a of this.accessories) a.destroy();
+        this.accessories = [];
+
         this.root3d = new Node('kuafu');
         this.root3d.layer = Layers.Enum.DEFAULT;
+        this.root3d.active = wasActive;
         parent.addChild(this.root3d);
-        this.torso = this.makeNode(this.root3d, 'torso', 'cyl', BODY);
-        this.torso.setPosition(0, 0.78, 0); this.torso.setScale(0.32, 0.62, 0.24);
-        const chest = this.makeNode(this.root3d, 'chest', 'sphere', BODY);
-        chest.setPosition(0, 1.12, 0); chest.setScale(0.3, 0.3, 0.22);
-        this.head = this.makeNode(this.root3d, 'head', 'sphere', BODY);
-        this.head.setPosition(0, 1.36, 0); this.head.setScale(0.38, 0.38, 0.38);
-        const bun = this.makeNode(this.root3d, 'bun', 'sphere', BODY);
-        bun.setPosition(0, 1.6, -0.06); bun.setScale(0.17, 0.17, 0.17);
-        this.legL = this.limb('legL', 0.52, -0.13, 0.52);
-        this.legR = this.limb('legR', 0.52, 0.13, 0.52);
-        this.armL = this.limb('armL', 1.05, -0.2, 0.42);
-        this.armR = this.limb('armR', 1.05, 0.2, 0.42);
-        this.staff = this.makeNode(this.root3d, 'staff', 'cyl', STAFF);
-        this.staff.setPosition(0, 1.0, -0.26);
-        this.staff.setScale(0.07, 0.07, 1.15);
-        this.shadow3d = this.makeNode(parent, 'kuafuShadow', 'cyl', [12, 6, 3]);
-        this.shadow3d.setPosition(0, 0.02, 0); this.shadow3d.setScale(0.8, 0.02, 0.8);
+        // 健壮体型（躯干加宽加厚 + 胸腔）
+        this.torso = this.makePartFn(this.root3d, 'torso', 'cyl', bodyTint);
+        this.torso.setPosition(0, 0.78, 0); this.torso.setScale(0.4, 0.62, 0.3);
+        const chest = this.makePartFn(this.root3d, 'chest', 'sphere', bodyTint);
+        chest.setPosition(0, 1.12, 0); chest.setScale(0.36, 0.32, 0.26);
+        // 神话服饰：腰带 + 兽皮战裙
+        const belt = this.makePartFn(this.root3d, 'belt', 'cyl', [94, 58, 30]);
+        belt.setPosition(0, 0.6, 0); belt.setScale(0.48, 0.1, 0.38);
+        const skirt = this.makePartFn(this.root3d, 'skirt', 'cyl', [70, 44, 26]);
+        skirt.setPosition(0, 0.42, 0); skirt.setScale(0.46, 0.3, 0.36);
+        // 头 + 发髻
+        this.head = this.makePartFn(this.root3d, 'head', 'sphere', bodyTint);
+        this.head.setPosition(0, 1.36, 0); this.head.setScale(0.4, 0.4, 0.4);
+        const bun = this.makePartFn(this.root3d, 'bun', 'sphere', bodyTint);
+        bun.setPosition(0, 1.62, -0.06); bun.setScale(0.18, 0.18, 0.18);
+        // 四肢（健壮加粗）
+        this.legL = this.limb('legL', 0.52, -0.15, 0.52, bodyTint);
+        this.legR = this.limb('legR', 0.52, 0.15, 0.52, bodyTint);
+        this.armL = this.limb('armL', 1.05, -0.24, 0.44, bodyTint);
+        this.armR = this.limb('armR', 1.05, 0.24, 0.44, bodyTint);
+        // 桃木神杖 + 杖头灵光珠
+        this.staff = this.makePartFn(this.root3d, 'staff', 'cyl', staffTint);
+        this.staff.setPosition(0, 1.0, -0.28);
+        this.staff.setScale(0.08, 0.08, 1.2);
+        this.staff.setRotationFromEuler(0, 0, 28);
+        const orb = this.makePartFn(this.staff, 'orb', 'sphere', [255, 209, 102]);
+        orb.setPosition(0, 0.62, 0); orb.setScale(0.26, 0.26, 0.26);
+        // 皮肤专属几何配件
+        for (let i = 0; i < accessories.length; i++) {
+            const ac = accessories[i];
+            const mesh = ac.shape === 'box' ? 'box' : ac.shape === 'cone' ? 'cone' : ac.shape === 'cyl' ? 'cyl' : 'sphere';
+            const n = this.makePartFn(this.root3d, `acc${i}`, mesh as 'box', ac.tint);
+            n.setPosition(ac.pos[0], ac.pos[1], ac.pos[2]);
+            n.setScale(ac.scale[0], ac.scale[1], ac.scale[2]);
+            this.accessories.push(n);
+        }
+        // 影子
+        this.shadow3d = this.makePartFn(parent, 'kuafuShadow', 'cyl', [12, 6, 3]);
+        this.shadow3d.setPosition(0, 0.02, 0); this.shadow3d.setScale(0.85, 0.02, 0.85);
+    }
+
+    /** 换肤（标题页低频操作）：销毁重建 */
+    applySkin(bodyTint: [number, number, number], staffTint: [number, number, number],
+        accessories: SkinAccessory[]) {
+        const parent = this.root3d.parent!;
+        const pos = this.root3d.position.clone();
+        const yaw = this.yawDeg;
+        this.build(parent, bodyTint, staffTint, accessories);
+        this.root3d.setPosition(pos.x, pos.y, pos.z);
+        this.yawDeg = yaw;
+    }
+
+    private limb(name: string, pivotY: number, x: number, len: number, rgb: [number, number, number]): Node {
+        const pivot = new Node(name);
+        pivot.layer = Layers.Enum.DEFAULT;
+        pivot.setParent(this.root3d);
+        pivot.setPosition(x, pivotY, 0);
+        const seg = this.makePartFn(pivot, 'seg', 'cyl', rgb);
+        seg.setPosition(0, -len / 2, 0);
+        seg.setScale(0.19, len, 0.19);       // 健壮：四肢加粗
+        return pivot;
     }
 
     get root(): Node { return this.root3d; }
     get shadow(): Node { return this.shadow3d; }
     get lastHop(): number { return this._lastHop; }
-
-    private limb(name: string, pivotY: number, x: number, len: number): Node {
-        const pivot = new Node(name);
-        pivot.layer = Layers.Enum.DEFAULT;
-        pivot.setParent(this.root3d);
-        pivot.setPosition(x, pivotY, 0);
-        const seg = this.makeNode(pivot, 'seg', 'cyl', BODY);
-        seg.setPosition(0, -len / 2, 0);
-        seg.setScale(0.16, len, 0.16);
-        return pivot;
-    }
 
     update(dt: number, input: AnimInput) {
         // 状态切换：进入 dead 时重置倒地计时
@@ -76,7 +131,7 @@ export class ProceduralKuafu implements CharacterAnimator {
             if (input.state === 'dead' && this.state !== 'dead') this.deadT = 0;
             this.state = input.state;
         }
-        this._lastHop = input.jumpT >= 0 ? Math.sin(input.jumpT * Math.PI) * 1.42 : 0;
+        this._lastHop = input.jumpT >= 0 ? Math.sin(input.jumpT * Math.PI) * HOP_U : 0;
         const root = this.root3d;
         root.setPosition(root.position.x, this._lastHop, 0);
         this.yawDeg = input.yawDeg;
@@ -91,7 +146,7 @@ export class ProceduralKuafu implements CharacterAnimator {
         }
         // 影子随高度收缩
         const ss = Math.max(0.3, 1 - this._lastHop * 0.5);
-        this.shadow3d.setScale(0.8 * ss, 0.02, 0.8 * ss);
+        this.shadow3d.setScale(0.85 * ss, 0.02, 0.85 * ss);
     }
 
     private poseIdle(input: AnimInput) {

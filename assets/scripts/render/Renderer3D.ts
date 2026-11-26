@@ -21,6 +21,8 @@ import { ObstacleCatalog, ObstacleDef } from '../config/ObstacleCatalog';
 import { CharAnimState } from './CharacterAnimator';
 import { ProceduralKuafu } from './ProceduralKuafu';
 import { WorldShift } from '../core/WorldShift';
+import { SkinDef } from '../config/SkinCatalog';
+import { TileTemplate, DecorSpec } from '../config/TileTemplates';
 
 /** 道具颜色（神通/道具统一配色） */
 const ITEM_TINT: Record<ItemKind, [number, number, number]> = {
@@ -88,12 +90,21 @@ export class Renderer3D implements IRenderer {
     private playerX = 0;
     private catalog: ObstacleCatalog;
     private defMap = new Map<string, ObstacleDef>();
+    private tiles: TileTemplate[] = [];
+    private themeDecorTint: [number, number, number][] = [
+        [40, 70, 34], [64, 110, 96], [150, 108, 52], [210, 170, 80],
+    ];
 
     constructor(cfg: GameConfig, catalog: ObstacleCatalog) {
         this.cfg = cfg;
         this.catalog = catalog;
         for (const d of catalog.obstacles) this.defMap.set(d.id, d);
         this.buildScene();
+    }
+
+    /** 注入地块模板目录（Game 装配时调用一次） */
+    setTileTemplates(tiles: TileTemplate[]): void {
+        this.tiles = tiles;
     }
 
     // ---------- 材质/几何 ----------
@@ -369,7 +380,46 @@ export class Renderer3D implements IRenderer {
                 });
             }
         }
+        // 数据驱动模板装饰（Phase 5）：seg.templateId → tile-templates.json decor spec
+        this.applyTemplateDecor(seg, addDecor);
         return view;
+    }
+
+    /** 数据驱动装饰：按模板 spec 实例化（装饰 mesh 按类型映射，tint 随主题） */
+    private applyTemplateDecor(
+        seg: TrackSegment,
+        addDecor: (kind: string, rgb: [number, number, number], dAbs: number, lane: number,
+            place: (n: Node, p: PathSample, dy: number) => void) => void,
+    ): void {
+        const tpl = this.tiles.find((t) => t.id === seg.templateId);
+        if (!tpl || !tpl.decor.length) return;
+        const themeTint = this.themeDecorTint[tpl.theme % this.themeDecorTint.length];
+        const kindMesh = (t: DecorSpec['t']): { mesh: Mesh; h: number } => {
+            switch (t) {
+            case 'pillar': return { mesh: this.mCyl, h: 2.2 };
+            case 'post': return { mesh: this.mBox, h: 0.9 };
+            case 'banner': return { mesh: this.mBox, h: 0.5 };
+            case 'arch': return { mesh: this.mCyl, h: 1.6 };
+            case 'tree': return { mesh: this.mCone, h: 1.5 };
+            case 'rock': return { mesh: this.mBox, h: 0.7 };
+            case 'lantern': return { mesh: this.mSphere, h: 0.6 };
+            case 'reed': return { mesh: this.mCone, h: 0.9 };
+            case 'crystal': return { mesh: this.mCone, h: 1.2 };
+            case 'urn': return { mesh: this.mSphere, h: 0.5 };
+            }
+        };
+        for (const dc of tpl.decor) {
+            const { mesh, h } = kindMesh(dc.t);
+            const dAbs = seg.startD + seg.length * dc.d;
+            const yBase = seg.kind === 'bridge' ? this.core!.path.sample(dAbs, 0).y : 0;
+            addDecor(dc.t, themeTint, dAbs, dc.lane, (n, p, dy) => {
+                const rr = 0.24 * dc.s;
+                n.setScale(rr, h * dc.s, rr);
+                n.setPosition(0, dy + (h * dc.s) / 2 + 0.02, 0);
+                void p;
+            });
+            void yBase;
+        }
     }
 
     private updateSegViews() {
@@ -586,6 +636,11 @@ export class Renderer3D implements IRenderer {
         this.kuafu.destroy();
         this.root3d?.destroy();
         this.matCache.clear();
+    }
+
+    /** 换肤透传（角色重建，材质独立实例） */
+    applySkin(skin: { bodyTint: [number, number, number]; staffTint: [number, number, number]; accessories: SkinDef['accessories'] }): void {
+        this.kuafu.applySkin(skin.bodyTint, skin.staffTint, skin.accessories);
     }
 
     // ---------- 摆放（全部经 path.sample + WorldShift） ----------

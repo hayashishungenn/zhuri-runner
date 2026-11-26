@@ -14,7 +14,7 @@ assets/scripts/
 └── platform/          # AdService（mock / wx 激励视频）
 ```
 
-测试：`npm test`（vitest，132 项）；类型检查：`npm run type-check`；代码规范：`npm run lint`。
+测试：`npm test`（vitest，144 项）；类型检查：`npm run type-check`；代码规范：`npm run lint`。
 
 ## 首次打开
 1. 打开 `/Applications/CocosCreator/CocosCreator.app`

@@ -13,4 +13,6 @@ export interface IRenderer {
     onCoreEvents(events: CoreEvent[]): void;
     /** 释放本渲染器持有的节点（2D 层随场景销毁，实现可为空） */
     destroy(): void;
+    /** 换肤（仅 3D 渲染器支持；2D 回退为剪影无皮肤概念） */
+    applySkin?(skin: { bodyTint: [number, number, number]; staffTint: [number, number, number]; accessories: unknown[] }): void;
 }

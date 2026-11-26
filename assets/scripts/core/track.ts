@@ -54,6 +54,8 @@ export interface TrackSegment {
     /** 地形边界 */
     boundaryLeft: 'open' | 'rail' | 'wall';
     boundaryRight: 'open' | 'rail' | 'wall';
+    /** 地块模板 id（Phase 5，渲染装饰用；生成器可空） */
+    templateId?: string;
 }
 
 const EPS = 1e-6;

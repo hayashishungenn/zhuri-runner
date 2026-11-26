@@ -5,6 +5,8 @@
 import { JsonAsset, resources, error } from 'cc';
 import { GameConfig, parseConfig } from './GameConfigSchema';
 import { ObstacleCatalog, parseCatalog } from './ObstacleCatalog';
+import { SkinCatalog, parseSkins } from './SkinCatalog';
+import { TileTemplateCatalog, parseTileTemplates } from './TileTemplates';
 
 const CONFIG_PATH = 'game-config';
 const CATALOG_PATH = 'obstacle-catalog';
@@ -26,6 +28,20 @@ export function loadGameConfig(): Promise<GameConfig> {
             error(String(e));
             throw e instanceof Error ? e : new Error(String(e));
         }
+    });
+}
+
+export function loadSkins(): Promise<SkinCatalog> {
+    return loadJson('skins').then((asset) => {
+        try { return parseSkins(asset.json); }
+        catch (e) { error(String(e)); throw e instanceof Error ? e : new Error(String(e)); }
+    });
+}
+
+export function loadTileTemplates(): Promise<TileTemplateCatalog> {
+    return loadJson('tile-templates').then((asset) => {
+        try { return parseTileTemplates(asset.json); }
+        catch (e) { error(String(e)); throw e instanceof Error ? e : new Error(String(e)); }
     });
 }
 

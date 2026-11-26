@@ -63,6 +63,8 @@ export class MapGenerator {
     readonly corners: Corner[] = [];
     /** 累计生成的地块总数（trim 不影响，用于生成量统计/测试） */
     totalGenerated = 0;
+    /** 地块模板 id 表（Phase 5 注入；按 kind+theme 过滤后随机取一，空表则不写 templateId） */
+    tileIds: { id: string; kind: string; theme: number }[] = [];
     /** 难度 [0,1]：转弯间隔上限随难度向 gapMin+20 收缩 */
     difficulty = 0;
     private cfg: MapGenCfg;
@@ -167,8 +169,13 @@ export class MapGenerator {
         const allowsProps = turn === 0 && kind !== 'bridge' && kind !== 'cave';
         const boundary: 'open' | 'rail' | 'wall' = kind === 'cliff' ? 'open' : kind === 'bridge' ? 'rail' : 'open';
 
+        // 模板抽取：kind+theme 匹配（数据来自 tile-templates.json 注入）
+        const cand = this.tileIds.filter((t) => t.kind === kind && t.theme === this.theme % 4);
+        const templateId = cand.length ? cand[Math.floor(this.rng.next() * cand.length)].id : undefined;
+
         const seg: TrackSegment = {
             kind,
+            templateId,
             startD: this.cur.d,
             length,
             entry: { x: this.cur.x, y: this.cur.y, z: this.cur.z },

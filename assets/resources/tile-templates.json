@@ -1,0 +1,51 @@
+{
+  "comment": "Phase 5 地块模板：42 种（4 主题 × 10 基型 + 2 通用过渡）。decor.t 为装饰类型（pillar/arch/post/banner/tree/rock/lantern/reed/crystal/urn），d 为沿地块的归一化位置 0-1，lane 为横向偏移（世界单位），s 为缩放。obstacle 允许段由 kind 继承。",
+  "templates": [
+    { "id": "sl_dahuang_a", "theme": 0, "kind": "straight", "label": "山林古道·松", "decor": [ { "t": "tree", "d": 0.2, "lane": -2.6, "s": 1.2 }, { "t": "tree", "d": 0.7, "lane": 2.7, "s": 1.0 } ] },
+    { "id": "sl_dahuang_b", "theme": 0, "kind": "straight", "label": "山林古道·石", "decor": [ { "t": "rock", "d": 0.35, "lane": -2.5, "s": 0.9 }, { "t": "tree", "d": 0.8, "lane": 2.6, "s": 1.1 } ] },
+    { "id": "sl_dahuang_c", "theme": 0, "kind": "straight", "label": "山林古道·灯", "decor": [ { "t": "lantern", "d": 0.25, "lane": -2.5, "s": 1.0 }, { "t": "lantern", "d": 0.75, "lane": 2.5, "s": 1.0 } ] },
+    { "id": "sl_dahuang_d", "theme": 0, "kind": "straight", "label": "山林古道·荒", "decor": [ { "t": "rock", "d": 0.5, "lane": 2.8, "s": 0.7 } ] },
+    { "id": "su_dahuang", "theme": 0, "kind": "slopeUp", "label": "山林上坡", "decor": [ { "t": "tree", "d": 0.3, "lane": -2.6, "s": 1.0 }, { "t": "tree", "d": 0.8, "lane": 2.7, "s": 0.9 } ] },
+    { "id": "sd_dahuang", "theme": 0, "kind": "slopeDown", "label": "山林下坡", "decor": [ { "t": "tree", "d": 0.5, "lane": 2.6, "s": 1.1 } ] },
+    { "id": "al_dahuang", "theme": 0, "kind": "arcL", "label": "山林左弯", "decor": [] },
+    { "id": "ar_dahuang", "theme": 0, "kind": "arcR", "label": "山林右弯", "decor": [] },
+    { "id": "br_dahuang", "theme": 0, "kind": "bridge", "label": "山林藤桥", "decor": [ { "t": "post", "d": 0.2, "lane": -2.8, "s": 1.0 }, { "t": "post", "d": 0.8, "lane": 2.8, "s": 1.0 } ] },
+    { "id": "cv_dahuang", "theme": 0, "kind": "cave", "label": "山林洞穴", "decor": [] },
+
+    { "id": "sl_weishui_a", "theme": 1, "kind": "straight", "label": "渭水泽畔·苇", "decor": [ { "t": "reed", "d": 0.2, "lane": -2.6, "s": 1.0 }, { "t": "reed", "d": 0.65, "lane": -2.5, "s": 0.8 } ] },
+    { "id": "sl_weishui_b", "theme": 1, "kind": "straight", "label": "渭水泽畔·舟", "decor": [ { "t": "rock", "d": 0.4, "lane": 2.7, "s": 0.8 }, { "t": "reed", "d": 0.8, "lane": 2.6, "s": 1.1 } ] },
+    { "id": "sl_weishui_c", "theme": 1, "kind": "straight", "label": "渭水泽畔·灯", "decor": [ { "t": "lantern", "d": 0.3, "lane": -2.5, "s": 1.1 } ] },
+    { "id": "sl_weishui_d", "theme": 1, "kind": "straight", "label": "渭水泽畔·柳", "decor": [ { "t": "tree", "d": 0.55, "lane": 2.7, "s": 1.2 } ] },
+    { "id": "su_weishui", "theme": 1, "kind": "slopeUp", "label": "渭水堤坡", "decor": [ { "t": "reed", "d": 0.5, "lane": -2.6, "s": 1.0 } ] },
+    { "id": "sd_weishui", "theme": 1, "kind": "slopeDown", "label": "渭水下行", "decor": [] },
+    { "id": "al_weishui", "theme": 1, "kind": "arcL", "label": "渭水左湾", "decor": [ { "t": "reed", "d": 0.5, "lane": -2.8, "s": 1.0 } ] },
+    { "id": "ar_weishui", "theme": 1, "kind": "arcR", "label": "渭水右湾", "decor": [] },
+    { "id": "br_weishui", "theme": 1, "kind": "bridge", "label": "渭水木桥", "decor": [ { "t": "post", "d": 0.5, "lane": -2.9, "s": 1.2 } ] },
+    { "id": "cv_weishui", "theme": 1, "kind": "cave", "label": "渭水岩穴", "decor": [] },
+
+    { "id": "sl_huangmo_a", "theme": 2, "kind": "straight", "label": "荒漠残柱", "decor": [ { "t": "pillar", "d": 0.3, "lane": -2.6, "s": 0.8 }, { "t": "pillar", "d": 0.75, "lane": 2.7, "s": 0.6 } ] },
+    { "id": "sl_huangmo_b", "theme": 2, "kind": "straight", "label": "荒漠骸岩", "decor": [ { "t": "rock", "d": 0.45, "lane": -2.5, "s": 1.1 }, { "t": "rock", "d": 0.8, "lane": 2.6, "s": 0.7 } ] },
+    { "id": "sl_huangmo_c", "theme": 2, "kind": "straight", "label": "荒漠枯木", "decor": [ { "t": "tree", "d": 0.5, "lane": 2.8, "s": 0.6 } ] },
+    { "id": "sl_huangmo_d", "theme": 2, "kind": "straight", "label": "荒漠荒丘", "decor": [] },
+    { "id": "su_huangmo", "theme": 2, "kind": "slopeUp", "label": "荒漠沙坡", "decor": [ { "t": "rock", "d": 0.6, "lane": -2.7, "s": 0.8 } ] },
+    { "id": "sd_huangmo", "theme": 2, "kind": "slopeDown", "label": "荒漠滑沙", "decor": [] },
+    { "id": "al_huangmo", "theme": 2, "kind": "arcL", "label": "荒漠左回", "decor": [] },
+    { "id": "ar_huangmo", "theme": 2, "kind": "arcR", "label": "荒漠右回", "decor": [ { "t": "pillar", "d": 0.5, "lane": 2.8, "s": 0.7 } ] },
+    { "id": "br_huangmo", "theme": 2, "kind": "bridge", "label": "荒漠栈桥", "decor": [ { "t": "post", "d": 0.3, "lane": -2.9, "s": 1.0 }, { "t": "post", "d": 0.7, "lane": 2.9, "s": 1.0 } ] },
+    { "id": "cv_huangmo", "theme": 2, "kind": "cave", "label": "荒漠岩窟", "decor": [] },
+
+    { "id": "sl_fusang_a", "theme": 3, "kind": "straight", "label": "扶桑金道·晶", "decor": [ { "t": "crystal", "d": 0.3, "lane": -2.6, "s": 1.0 }, { "t": "crystal", "d": 0.7, "lane": 2.7, "s": 0.9 } ] },
+    { "id": "sl_fusang_b", "theme": 3, "kind": "straight", "label": "扶桑金道·鼎", "decor": [ { "t": "urn", "d": 0.5, "lane": -2.5, "s": 1.0 } ] },
+    { "id": "sl_fusang_c", "theme": 3, "kind": "straight", "label": "扶桑金道·灯", "decor": [ { "t": "lantern", "d": 0.25, "lane": -2.6, "s": 1.2 }, { "t": "lantern", "d": 0.75, "lane": 2.6, "s": 1.2 } ] },
+    { "id": "sl_fusang_d", "theme": 3, "kind": "straight", "label": "扶桑金道·神", "decor": [ { "t": "pillar", "d": 0.5, "lane": 2.8, "s": 1.3 } ] },
+    { "id": "su_fusang", "theme": 3, "kind": "slopeUp", "label": "扶桑天梯", "decor": [ { "t": "crystal", "d": 0.4, "lane": -2.7, "s": 1.1 } ] },
+    { "id": "sd_fusang", "theme": 3, "kind": "slopeDown", "label": "扶桑云阶", "decor": [ { "t": "crystal", "d": 0.6, "lane": 2.7, "s": 0.9 } ] },
+    { "id": "al_fusang", "theme": 3, "kind": "arcL", "label": "扶桑左环", "decor": [ { "t": "urn", "d": 0.5, "lane": -2.7, "s": 0.9 } ] },
+    { "id": "ar_fusang", "theme": 3, "kind": "arcR", "label": "扶桑右环", "decor": [] },
+    { "id": "br_fusang", "theme": 3, "kind": "bridge", "label": "扶桑虹桥", "decor": [ { "t": "banner", "d": 0.5, "lane": 0, "s": 1.1 } ] },
+    { "id": "cv_fusang", "theme": 3, "kind": "cave", "label": "扶桑辉洞", "decor": [] },
+
+    { "id": "tr_dahuang_weishui", "theme": 0, "kind": "transition", "label": "山林→渭水", "decor": [ { "t": "banner", "d": 0.5, "lane": 0, "s": 1.0 } ] },
+    { "id": "tr_huangmo_fusang", "theme": 2, "kind": "transition", "label": "荒漠→扶桑", "decor": [ { "t": "banner", "d": 0.5, "lane": 0, "s": 1.2 } ] }
+  ]
+}
