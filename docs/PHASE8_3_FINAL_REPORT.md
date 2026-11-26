@@ -67,7 +67,7 @@
 
 - 画面样本：开场 `/tmp/zhuri-final2-B01-title.png`；固定种子 777 的路口窗口（cornerD=102.217，dir=1，turnWindow 打开）`/tmp/zhuri-final2-corner2.png`；结算 `/tmp/zhuri-final2-B07-dead.png`；征途通关 `/tmp/zhuri-final2-B09-journey.png`；奔跑 `/tmp/zhuri-final2-B05-run.png`。视口 720×1280、3D/mid、默认静音；种子仅在路口样本固定为 777，其余为真实随机。
 - 10 次连续开局/结算/重开：堆 44.68MB → 41.34MB、节点 209 → 211、`ads.runs=21/ends=21`，无持续增长；记录 `/tmp/zhuri-final2-restarts.json`。
-- 10 分钟浏览器耐久：22 次采样结果在最终定稿时写入本节（日志 `/tmp/zhuri83-browser-stress.log`）。可采指标为 JS 堆、节点数、实体数、核心状态；浏览器帧时间/GPU 无法从 CDP 导出，标注未采集。
+- 10 分钟浏览器耐久：22 次采样（日志 `/tmp/zhuri83-browser-stress.log`）。JS 堆 33.70–64.43MB 波动，无单调增长；节点 212–368，障碍 ≤10、碎片 ≤25、道具 ≤3；状态 run/dead 交替（死亡后自动重开），无异常退出。可采指标为 JS 堆、节点数、实体数、核心状态；浏览器帧时间/GPU 无法从 CDP 导出，标注未采集。
 - 画面问题留给 Phase 9：路口提示与角色遮挡关系、障碍辨识度、太阳/饮水反馈的视觉强度需美术阶段按上述截图打磨；本阶段只修功能阻塞。
 
 ## 7. 微信测试包与模拟器
@@ -86,4 +86,4 @@
 - 待验：微信模拟器（有效 AppID 缺失）；Android/iOS 真机、触控手感、发热、正式广告统一留到 Phase 11；浏览器触控自动化受 headless CDP 限制，已由 Node cc 桩测试覆盖命中逻辑。
 - 主包体积门槛：构建目录约 10M，微信 4MB 主包限制未能在本机确认，保留为风险。
 
-提交 hash：最终提交后补记。
+提交：`da05750754fa60c87ab557b33f6cec8fda3a3f11`（fix(phase8.3-final): HUD 长页面越界与测试日期口径）；本报告的 10 分钟耐久数据由后续文档提交补记（见 `git log -1`）。工作区保留未提交的本地编辑器配置 `profiles/v2/packages/scene.json`，不进入包与提交。
