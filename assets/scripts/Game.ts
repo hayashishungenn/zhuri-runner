@@ -175,6 +175,13 @@ export class Game extends Component {
         if (tick.revertedSkinId) {
             this.syncVisualSkin(tick.revertedSkinId);
         }
+        // 教程步骤在 Session 内推进，HUD 文案必须每帧同步，否则玩家永远只看到第一步
+        const tut = this.session.tutorial;
+        if (this.session.isTutorialRun && !tut.done && tut.step) {
+            this.hud.showTutorialHint(tut.step.text, !this.save?.data.tutorial.done);
+        } else {
+            this.hud.hideTutorialHint();
+        }
         this.routeEvents(tick.events);
         this.hud.update(dtRaw, this.core);
         this.renderer.onCoreEvents(tick.events);

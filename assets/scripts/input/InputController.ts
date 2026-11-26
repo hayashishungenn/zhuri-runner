@@ -8,9 +8,9 @@
  * - 输入取消：TOUCH_CANCEL 丢弃该触点手势（系统打断/来电等）。
  * - 手势阈值配置化（input.swipeMin / input.tapMax），误触（小于阈值）不触发动作。
  */
-import { input, Input, EventTouch, KeyCode } from 'cc';
+import { input, Input, EventTouch, KeyCode, view } from 'cc';
 import { Intent } from '../core/types';
-import { toLogicalX, toLogicalY } from '../render/layout';
+import { uiToLogical } from '../render/layout';
 import { InputCfg } from '../config/GameConfigSchema';
 
 export interface InputDelegate {
@@ -58,7 +58,8 @@ export class InputController {
     private onTouchStart(e: EventTouch) {
         const id = e.getID() ?? 0;
         const u = e.getUILocation();
-        const gx = toLogicalX(u.x), gy = toLogicalY(u.y);
+        const v = view.getVisibleSize();
+        const { gx, gy } = uiToLogical(u.x, u.y, v.width, v.height);
         this.delegate.onTapStart(gx, gy);
         this.touches.set(id, { x: gx, y: gy });
         // 首个未结束触点获得手势归属（第二根手指不抢占）
@@ -85,7 +86,8 @@ export class InputController {
         if (cancelled) return;
 
         const u = e.getUILocation();
-        const gx = toLogicalX(u.x), gy = toLogicalY(u.y);
+        const v = view.getVisibleSize();
+        const { gx, gy } = uiToLogical(u.x, u.y, v.width, v.height);
         const dx = gx - start.x, dy = gy - start.y;
         const MIN = this.cfg.swipeMin, TAP = this.cfg.tapMax;
         if (Math.abs(dx) > Math.abs(dy) && Math.abs(dx) > MIN) {

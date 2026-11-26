@@ -180,6 +180,13 @@
 
 回归：`npm run type-check` 0 错；`npm run lint` 0 错；Cocos Creator 3.8.8 微信构建（`./scripts/build-wechat.sh`）成功（exit=36，Missing class = 0，`main/index.js` 403KB，`AdRewardCoordinator`/`FIXED_DT`/`isSafeSpawnRange`/`sanitizeSaveData` 全部入包）。详见 `docs/PHASE8_1_REPORT.md`。
 
+### Phase 8.3（无真机最终验收，2026-11-26）
+
+当前工作区重跑：`npm test` **19 文件 / 268 项通过**（4.50s）；`npm run type-check` 0；`npm run lint` 0。Phase 8.2 的 263 项为历史基线，新增 5 项：触控坐标换算 3、静音后 BGM 恢复 1、教程步骤推进 1。
+
+默认 `npm test` 已包含 1000 种子零无敌重放、1000 种子逐波重放、1000 局/600s/1800s/100000 地块压力与长跑；本轮未另开独立入口。
+浏览器：冷启动/教程/四向输入/暂停恢复/10 次结算重开/存档往返/广告关闭均执行；Android/iOS 与微信模拟器（AppID 无效）未验证。详见 PHASE8_3_REPORT.md。
+
 ### 待人工验证（无法自动化）
 
 - Phase 8 真机兼容矩阵（Android 低/中/高 + iOS）与微信开发者工具主包/分包体积

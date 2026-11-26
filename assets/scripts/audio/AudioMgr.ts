@@ -77,11 +77,14 @@ export class AudioMgr {
     /** 静音切换（联动 HUD 静音按钮） */
     setMuted(m: boolean): void {
         this.muted = m;
-        if (this.bgmSource) { if (m) this.bgmSource.stop(); else if (this.bgmSource.clip) this.bgmSource.play(); }
-        if (this.windSource) { if (m) this.windSource.stop(); else if (this.windSource.clip) this.windSource.play(); }
         if (m) {
+            this.bgmSource?.stop();
+            this.windSource?.stop();
             for (const s of this.sfxPool) s.stop();
+            return;
         }
+        // 默认静音启动时不会创建 BGM/环境音源；取消静音后必须补建并播放
+        if (this.loaded) this.startBgm();
     }
 
     get isMuted(): boolean { return this.muted; }
