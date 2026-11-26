@@ -5,7 +5,7 @@ import { DEFAULT_CONFIG } from '../assets/scripts/config/GameConfigSchema';
 import { Obstacle } from '../assets/scripts/core/types';
 
 const CFG = DEFAULT_CONFIG;
-const DT = 0.016;
+const DT = 1 / 60;
 
 function makeCore(seed = 42): GameCore {
     return new GameCore(CFG, new SeededRng(seed));

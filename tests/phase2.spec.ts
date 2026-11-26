@@ -200,7 +200,7 @@ describe('30 分钟自动奔跑压测（任务书要求）', () => {
                 if (e.type === 'died') {
                     cumDist += c.dist;
                     deaths++;
-                    c.startRun();
+                    c.startRun({ seed: 2025 + deaths });
                     ws.shift.x = 0; ws.shift.z = 0;   // 重开 = 场景重建，shift 归零
                 }
             }

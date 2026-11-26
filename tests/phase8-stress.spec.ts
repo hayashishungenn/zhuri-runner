@@ -1,7 +1,10 @@
 /**
  * Phase 8 压力测试：≥1000 局不同种子/速度/难度、600s 长跑、1000 次重开、
- * 1000 次暂停恢复、资源与帧时间上界。仅逻辑层（零 cc），帧时间为 Node 实测值，
- * 不代表手机 GPU/渲染性能（真机项另列）。
+ * 1000 次暂停恢复、资源与帧时间上界。
+ *
+ * 边界声明（Phase 8.1 明确）：
+ * 本测试使用无敌模式仅用于验证生成管线、数组有界、资源回收与长跑稳定性，
+ * 绝不用于证明地图可达性或碰撞公平性（真实无无敌 1000 种子重放见 phase8-1-engine.spec.ts）。
  */
 import { describe, expect, it } from 'vitest';
 import { GameCore } from '../assets/scripts/core/GameCore';

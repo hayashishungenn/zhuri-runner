@@ -49,42 +49,57 @@ function makeAd(outcome: 'success' | 'timeout' = 'success', cfg?: Partial<AdServ
     return { ad, rewarded };
 }
 
-describe('跨局事务与教程参数（Phase 8）', () => {
-    it('教程参数在结束/下一局还原，不污染正式局', () => {
+describe('跨局事务与教程参数（Phase 8 / 8.1）', () => {
+    it('教程参数以单局覆写返回并由核心还原，不污染共享基础配置', () => {
         const ledger = new RunLedger();
-        const spawn = { rowInterval: 8 };
-        const map = { turnGapMin: 30, turnGapMax: 180 };
-        ledger.beginRun(spawn, map, true);
-        expect(spawn.rowInterval).toBe(16);
-        expect(map.turnGapMax).toBe(60);
-        ledger.endTutorial(spawn, map);
-        expect(spawn.rowInterval).toBe(8);
-        expect(map.turnGapMax).toBe(180);
-        // 连续两局教程不会把已覆写值当作"原值"备份
-        ledger.beginRun(spawn, map, true);
-        ledger.beginRun(spawn, map, false);
-        expect(spawn.rowInterval).toBe(8);
-        expect(map.turnGapMax).toBe(180);
+        const cfg = JSON.parse(JSON.stringify(CFG));
+        const origInterval = cfg.spawn.rowInterval;
+        const origGapMax = cfg.map.turnGapMax;
+        const c = new GameCore(cfg, new SeededRng(5), { turnsEnabled: true });
+
+        const r1 = ledger.beginRun(true);
+        c.startRun({ seed: r1.runId, overrides: r1.overrides });
+        expect(c.activeOverrides?.spawnRowInterval).toBe(16);
+        expect(c.mapGen.activeCfg.turnGapMax).toBe(60);
+        expect(cfg.spawn.rowInterval).toBe(origInterval);
+        expect(cfg.map.turnGapMax).toBe(origGapMax);
+
+        c.setRunOverrides(ledger.endTutorial());
+        expect(c.activeOverrides).toBeNull();
+        expect(c.mapGen.activeCfg.turnGapMax).toBe(origGapMax);
+
+        // 连续两局教程再切回正式局，共享配置始终未变
+        const r2 = ledger.beginRun(true);
+        c.startRun({ seed: r2.runId, overrides: r2.overrides });
+        const r3 = ledger.beginRun(false);
+        c.startRun({ seed: r3.runId, overrides: r3.overrides });
+        expect(c.activeOverrides).toBeNull();
+        expect(c.mapGen.activeCfg.turnGapMax).toBe(origGapMax);
+        expect(cfg.spawn.rowInterval).toBe(origInterval);
     });
 
     it('跨局金币事务 id 唯一，同局同碎片不重复发放', () => {
         const ledger = new RunLedger();
-        const spawn = { rowInterval: 8 };
-        const map = { turnGapMin: 30, turnGapMax: 180 };
-        const seed1 = ledger.beginRun(spawn, map, false);
+        const { runId: seed1 } = ledger.beginRun(false);
         expect(ledger.fragmentGrant(5, 1)).toEqual({ txId: `frag:${seed1}:5`, amount: 5 });
         expect(ledger.fragmentGrant(5, 1)).toBeNull();
-        const seed2 = ledger.beginRun(spawn, map, false);
+        const { runId: seed2 } = ledger.beginRun(false);
         expect(seed2).not.toBe(seed1);
         expect(ledger.fragmentGrant(5, 1)).toEqual({ txId: `frag:${seed2}:5`, amount: 5 });
     });
 
-    it('结算去重：同一局只结算一次', () => {
+    it('结算去重：同一局无复活只结算一次，复活后允许增量补记', () => {
         const ledger = new RunLedger();
-        const seed = ledger.beginRun({ rowInterval: 8 }, { turnGapMin: 1, turnGapMax: 2 }, false);
-        expect(ledger.claimSettlement(seed)).toBe(true);
-        expect(ledger.claimSettlement(seed)).toBe(false);
-        expect(ledger.claimSettlement(seed + 1)).toBe(false);
+        const { runId: seed } = ledger.beginRun(false);
+        const s1 = ledger.claimSettlement(seed, 500, 10);
+        expect(s1).toEqual({ isFirstSettle: true, deltaLi: 500, deltaFrags: 10, deltaGold: 0 });
+        expect(ledger.claimSettlement(seed, 500, 10)).toBeNull();
+        expect(ledger.claimSettlement(seed + 1, 500, 10)).toBeNull();
+        // 复活后再跑 300 里 → 仅补记增量 300
+        ledger.noteRevive();
+        const s2 = ledger.claimSettlement(seed, 800, 15);
+        expect(s2).toEqual({ isFirstSettle: false, deltaLi: 300, deltaFrags: 5, deltaGold: 0 });
+        expect(ledger.claimSettlement(seed, 800, 15)).toBeNull();
     });
 
     it('异步复活回调在状态已变时不生效', () => {

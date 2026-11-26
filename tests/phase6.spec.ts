@@ -294,13 +294,19 @@ describe('新用户完整流程模拟', () => {
 
     it('重复开局状态一致（5 次 startRun）', () => {
         const c = makeCore(9);
+        const snaps: { dist: number; frags: number; state: string }[] = [];
         for (let r = 0; r < 5; r++) {
             c.startRun();
+            expect(c.state).toBe('run');
             expect(c.dist).toBe(0);
             expect(c.frags).toBe(0);
             expect(c.obstacles.length).toBe(0);
             for (let i = 0; i < 600; i++) { c.update(DT); c.drainEvents(); }
+            snaps.push({ dist: c.dist, frags: c.frags, state: c.state });
         }
+        // 同种子重复 5 次无输入奔跑结果完全一致（可复现）
+        for (const s of snaps) expect(s).toEqual(snaps[0]);
+        c.startRun();
         expect(c.state).toBe('run');
     });
 });

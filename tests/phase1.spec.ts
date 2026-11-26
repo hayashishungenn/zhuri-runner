@@ -199,8 +199,8 @@ describe('帧率一致性（运动与帧率解耦验证）', () => {
         const a = noLane(1 / 60);
         const b = noLane(1 / 32);
         const fragDiff = Math.abs(a.frags - b.frags) / Math.max(a.frags, 1);
-        expect(fragDiff).toBeLessThanOrEqual(0.15);
-        expect(a.frags).toBeGreaterThan(100);              // 采样规模足够
+        expect(fragDiff).toBeLessThanOrEqual(0.01);        // 固定步长下 60fps 与 32fps 拾取几乎完全一致
+        expect(a.frags).toBeGreaterThanOrEqual(80);        // 采样规模足够（独立 dropRng 流）
         const relDiff = Math.abs(a.dist - b.dist) / Math.max(a.dist, 1e-6);
         expect(relDiff).toBeLessThan(0.005);
     });
